@@ -49,8 +49,27 @@ def test_schem():
     load(f"{OUTPUT_DIR}/schem_struct/structure_0_0_0.nbt")
     print("Loaded Schem NBT")
 
+def test_split():
+    dirt_vol = np.zeros((10, 10, 10), dtype=bool)
+    dirt_vol[1:5, 1:5, 1:5] = True
+    stone_vol = np.zeros((10, 10, 10), dtype=bool)
+    stone_vol[5:9, 5:9, 5:9] = True
+    vs = VolumeStructure()
+    vs.add_layer(dirt_vol, "minecraft:dirt")
+    vs.add_layer(stone_vol, "minecraft:stone")
+    split = vs.split_by_block()
+    assert "minecraft:dirt" in split
+    assert "minecraft:stone" in split
+    assert len(split) == 2
+    # save the split structures
+    for block_namespaced_name, block_vs in split.items():
+        block_name = block_namespaced_name.replace(":", "_")
+        block_vs.save_nbt(f"{OUTPUT_DIR}/example_{block_name}", "structure")
+        block_vs.save_schem(f"{OUTPUT_DIR}/example/split_{block_name}.schem")
+
 if __name__ == "__main__":
     test_small_volume()
     test_large_volume()
     test_tiff()
     test_schem()
+    test_split()

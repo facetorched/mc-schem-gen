@@ -25,4 +25,10 @@ vs.add_schem("tests/data/min_cell.schematic")
 vs.save_schem("output/example.schem")
 vs.save_nbt("output/example", "structure")
 
+# Save individual schematics for each block type
+split = vs.split_by_block()
+for block_namespaced_name, block_vs in split.items():
+    block_name = block_namespaced_name.replace(":", "_")
+    block_vs.save_nbt(f"output/example_{block_name}", "structure")
+    block_vs.save_schem(f"output/example/split_{block_name}.schem")
 ```

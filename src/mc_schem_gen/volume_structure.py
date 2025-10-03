@@ -45,6 +45,19 @@ class VolumeStructure:
         self._max_y = max(self._max_y, y)
         self._max_z = max(self._max_z, z)
 
+    def set_block(self, x: int, y: int, z: int, block: Block):
+        self._blocks[(x, y, z)] = block
+        self._update_size(x, y, z)
+    
+    def get_block(self, x: int, y: int, z: int) -> Block:
+        return self._blocks.get((x, y, z), Block("minecraft", "air"))
+    
+    def get_blocks(self):
+        return self._blocks.items()
+    
+    def get_volume_size(self):
+        return (self._max_x + 1, self._max_y + 1, self._max_z + 1)
+
     def add_layer(self, volume: np.ndarray, block_spec: str):
         """Add blocks for every True voxel in volume."""
         ns, base = block_spec.split(":", 1)
@@ -52,8 +65,7 @@ class VolumeStructure:
         it = np.ndindex(volume.shape)
         for x, y, z in it:
             if volume[x, y, z]:
-                self._blocks[(x, y, z)] = block_obj
-                self._update_size(x, y, z)
+                self.set_block(x, y, z, block_obj)
 
     def add_schem(self, path: str):
         """
@@ -71,19 +83,25 @@ class VolumeStructure:
                     for z in range(sel.min_z, sel.max_z):
                         block, _ = level.get_version_block(x, y, z, dim, (self.platform, self.version))
                         if block.namespaced_name != "minecraft:air":
-                            self._blocks[(x, y, z)] = block
-                            self._update_size(x, y, z)
+                            self.set_block(x, y, z, block)
         finally:
             level.close()
 
-    def _get_volume_size(self):
-        return (self._max_x + 1, self._max_y + 1, self._max_z + 1)
+    def split_by_block(self):
+        """Return a dictionary of block names and corresponding VolumeStructure objects."""
+        block_dict = {}
+        for (x, y, z), block in self._blocks.items():
+            block_name = block.namespaced_name
+            if block_name not in block_dict:
+                block_dict[block_name] = VolumeStructure(self.platform, self.version)
+            block_dict[block_name].set_block(x, y, z, block)
+        return block_dict
 
     # --------------------------
     # Save as Sponge schematic
     # --------------------------
     def save_schem(self, filepath: str):
-        size_x, size_y, size_z = self._get_volume_size()
+        size_x, size_y, size_z = self.get_volume_size()
         wrapper = amulet.level.formats.sponge_schem.SpongeSchemFormatWrapper(filepath)
         bounds = amulet.api.selection.SelectionGroup(
             amulet.api.selection.SelectionBox((0,0,0), (size_x, size_y, size_z))
@@ -106,7 +124,7 @@ class VolumeStructure:
     # --------------------------
     def save_nbt(self, directory: str, base_name: str, dataversion: int = None, max_size: int = 48):
         os.makedirs(directory, exist_ok=True)
-        size_x, size_y, size_z = self._get_volume_size()
+        size_x, size_y, size_z = self.get_volume_size()
         nx = (size_x + max_size - 1) // max_size
         ny = (size_y + max_size - 1) // max_size
         nz = (size_z + max_size - 1) // max_size
@@ -136,9 +154,7 @@ class VolumeStructure:
                     for (x,y,z), block in self._blocks.items():
                         if x0 <= x < x1 and y0 <= y < y1 and z0 <= z < z1:
                             rel = (x-x0, y-y0, z-z0)
-                            name = getattr(block, "namespaced_name", None)
-                            if name is None:
-                                name = f"{block.namespace}:{block.base_name}"
+                            name = block.namespaced_name
                             if name not in palette_index:
                                 entry = CompoundTag({"Name": StringTag(name)})
                                 if block.properties:

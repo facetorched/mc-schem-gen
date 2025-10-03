@@ -5,3 +5,4 @@ dist/
 tmp/
 tests/output/
 venv/
+output/
