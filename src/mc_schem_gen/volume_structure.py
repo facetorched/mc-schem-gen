@@ -1,37 +1,10 @@
 import numpy as np
-import tifffile
 import os
 
 from amulet.api.block import Block
 import amulet
 from amulet_nbt import NamedTag, CompoundTag, ListTag, IntTag, StringTag
 
-
-# --------------------------
-# Volume loading utilities
-# --------------------------
-
-def _to_bool_volume(arr: np.ndarray) -> np.ndarray:
-    """Convert raw array in ImageJ format z, y, x to boolean volume (x, z, y) = Minecraft (x, y, z) orientation."""
-    if arr.ndim == 4:  # drop color channels
-        arr = arr.sum(axis=-1)
-    # rearrange axes to (x, z, y) to be compatible with Minecraft.
-    # The first axis is West->East, the second is Bottom->Top, and the last is North->South
-    arr = np.moveaxis(arr, 2, 0)
-    return arr.astype(bool)
-
-def read_tiff(path: str) -> np.ndarray:
-    img = tifffile.imread(path)
-    return _to_bool_volume(img)
-
-def read_npy(path: str) -> np.ndarray:
-    arr = np.load(path)
-    return _to_bool_volume(arr)
-
-
-# --------------------------
-# VolumeStructure class
-# --------------------------
 
 class VolumeStructure:
     def __init__(self, platform: str = "java", version: tuple = (1, 21, 8)):
@@ -66,6 +39,13 @@ class VolumeStructure:
         for x, y, z in it:
             if volume[x, y, z]:
                 self.set_block(x, y, z, block_obj)
+    
+    def add_points(self, points: np.ndarray, block_spec: str):
+        """Add blocks for every (x,y,z) in points."""
+        ns, base = block_spec.split(":", 1)
+        block_obj = Block(ns, base)
+        for x, y, z in points:
+            self.set_block(x, y, z, block_obj)
 
     def add_schem(self, path: str):
         """
@@ -97,10 +77,8 @@ class VolumeStructure:
             block_dict[block_name].set_block(x, y, z, block)
         return block_dict
 
-    # --------------------------
-    # Save as Sponge schematic
-    # --------------------------
     def save_schem(self, filepath: str):
+        """Save the structure as a Sponge schematic file at <filepath>."""
         size_x, size_y, size_z = self.get_volume_size()
         wrapper = amulet.level.formats.sponge_schem.SpongeSchemFormatWrapper(filepath)
         bounds = amulet.api.selection.SelectionGroup(
@@ -119,10 +97,26 @@ class VolumeStructure:
         finally:
             level.close()
 
-    # --------------------------
-    # Save as structure NBT(s)
-    # --------------------------
-    def save_nbt(self, directory: str, base_name: str, dataversion: int = None, max_size: int = 48):
+    def save_nbt(self, directory: str, base_name: str, dataversion: int = None, max_size: int = 48, filename_mode: str = "auto"):
+        """
+        Save the structure as one or more Minecraft schematic .nbt files in <directory>.
+        If the structure exceeds max_size in any dimension, it will be split into multiple files.
+
+        Parameters
+        ----------
+        directory : str
+            Directory to save the .nbt files.
+        base_name : str
+            Base name for the .nbt files. If multiple files are created, they will be named
+            <base_name>_x_y_z.nbt where x,y,z are the tile indices.
+        dataversion : int, optional
+            The DataVersion to include in the NBT file. If None, it will be omitted.
+        max_size : int, optional
+            Maximum size in each dimension for a single .nbt file. Default is 48.
+        filename_mode : str, optional
+            "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
+            "indexed": always use indexed names.
+        """
         os.makedirs(directory, exist_ok=True)
         size_x, size_y, size_z = self.get_volume_size()
         nx = (size_x + max_size - 1) // max_size
@@ -176,9 +170,9 @@ class VolumeStructure:
                     root["entities"] = ListTag()
 
                     # Save
-                    if nx>1 or ny>1 or nz>1 or True:
+                    if nx>1 or ny>1 or nz>1 or filename_mode == "indexed":
                         fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
-                    else:
+                    elif filename_mode == "auto":
                         fname = f"{base_name}.nbt"
                     path = os.path.join(directory, fname)
                     NamedTag(root, name="").save_to(path, compressed=True, little_endian=False)
