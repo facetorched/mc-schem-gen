@@ -1,6 +1,5 @@
 import numpy as np
 import pyvista as pv
-import vtk
 import tifffile
 
 def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
@@ -170,11 +169,8 @@ def voxelize_mesh(mesh: pv.DataSet,
         spacing=spacing,
         origin=origin,
     )
-    pts = grid.points
-    imp = vtk.vtkImplicitPolyDataDistance()
-    imp.SetInput(mesh)
-    # Accurate but slow per-point evaluation. TODO can this be optimized?
-    distances = np.array([imp.EvaluateFunction(p) for p in pts], dtype=np.float32)
+    distancegrid = grid.compute_implicit_distance(mesh)
+    distances = distancegrid.point_data["implicit_distance"]
     sdf = distances.reshape(grid.dimensions[::-1])  # (z,y,x)
     voxel_diagonal = np.linalg.norm(spacing)
 

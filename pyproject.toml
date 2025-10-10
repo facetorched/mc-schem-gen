@@ -9,7 +9,7 @@ name = "mc-schem-gen"
 version = "0.0.1"
 description = "Generate Minecraft schem and nbt structures from 3D image data"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9,<3.12"
 license = {file = "LICENSE"}
 authors = [
     {name = "Kevin Tan"},
