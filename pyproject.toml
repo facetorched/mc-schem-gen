@@ -24,4 +24,6 @@ dependencies = [
     "amulet-core",
     "amulet-nbt",
     "pyvista",
+    "trimesh",
+    "mesh_to_sdf",
 ]

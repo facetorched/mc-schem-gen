@@ -1,6 +1,8 @@
 import numpy as np
 import pyvista as pv
 import tifffile
+import trimesh
+import mesh_to_sdf
 
 def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
     """
@@ -69,7 +71,8 @@ def read_mesh(filename: str,
               size: tuple = None,
               ignore_clip=False,
               fill: bool = True,
-              edge_mode: str = "center"
+              edge_mode: str = "center",
+              method: str = "mesh_to_sdf"
               ) -> np.ndarray:
     """
     Load a mesh from any VTK-compatible file format and convert to a boolean voxel volume.
@@ -92,6 +95,8 @@ def read_mesh(filename: str,
         'center' selects voxels whose centers are within the mesh surface,
         'inner' selects voxels whose centers are inside or touching the surface from inside,
         'outer' selects voxels whose centers are outside or touching the surface from outside.
+    method : {'mesh_to_sdf', 'implicit_distance'}, optional
+        Method to compute signed distance field. 'mesh_to_sdf' is more robust for complex meshes. 'implicit_distance' uses PyVista's built-in method.
     
     Returns
     -------
@@ -107,6 +112,7 @@ def read_mesh(filename: str,
             ignore_clip=ignore_clip,
             fill=fill,
             edge_mode=edge_mode,
+            method=method
         ),
     )
 
@@ -116,7 +122,9 @@ def voxelize_mesh(mesh: pv.DataSet,
                    size: tuple = None,
                    ignore_clip=False,
                    fill: bool = True,
-                   edge_mode: str = "center") -> np.ndarray:
+                   edge_mode: str = "center",
+                   method: str = "mesh_to_sdf"
+                   ) -> np.ndarray:
     """
     Convert a surface mesh into voxel coordinates (interior, surface, or both).
     
@@ -138,6 +146,9 @@ def voxelize_mesh(mesh: pv.DataSet,
         'center' selects voxels whose centers are within the mesh surface,
         'inner' selects voxels whose centers are inside or touching the surface from inside,
         'outer' selects voxels whose centers are outside or touching the surface from outside.
+    method : {'mesh_to_sdf', 'implicit_distance'}, optional
+        Method to compute signed distance field. 'mesh_to_sdf' is more robust for complex meshes. 
+        'implicit_distance' uses PyVista's built-in method (often faster).
     
     Returns
     -------
@@ -146,32 +157,39 @@ def voxelize_mesh(mesh: pv.DataSet,
     """
     # Ensure triangular mesh TODO: is this necessary?
     mesh = pv.PolyData(mesh).triangulate()
-    xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
-    if origin is None:
-        origin = (xmin, ymin, zmin)
-    origin = np.array(origin, dtype=float)
-    size_mesh = np.array([xmax - origin[0], ymax - origin[1], zmax - origin[2]], dtype=float)
+    mins, maxs = mesh.bounds[::2], mesh.bounds[1::2]
+    origin_mesh = np.array(mins, dtype=float)
+    if origin is not None:
+        for i in range(3):
+            if origin[i] is not None:
+                origin_mesh[i] = origin[i]
+    size_mesh = np.array(maxs, dtype=float) - origin_mesh
     if size is not None:
         for i in range(3):
             if size[i] is not None:
                 size_mesh[i] = size[i]
         
     if not ignore_clip:
-        if origin[0] > xmin or origin[1] > ymin or origin[2] > zmin:
-            raise ValueError(f"origin {origin} must be <= mesh minimum bounds {(xmin, ymin, zmin)}")
-        if origin[0] + size_mesh[0] > xmax or origin[1] + size_mesh[1] > ymax or origin[2] + size_mesh[2] > zmax:
-            raise ValueError(f"origin + size {origin + size_mesh} must be >= mesh maximum bounds {(xmax, ymax, zmax)}")
+        if np.any(mins < origin_mesh):
+            raise ValueError(f"origin {origin_mesh} must be <= mesh minimum bounds {mins}. Use ignore_clip=True to override.")
+        if np.any(maxs > origin_mesh + size_mesh):
+            raise ValueError(f"origin + size {origin_mesh + size_mesh} must be >= mesh maximum bounds {maxs}. Use ignore_clip=True to override.")
         
     spacing = np.array((spacing, spacing, spacing), float) if np.isscalar(spacing) else np.array(spacing, float)
     nxyz = np.ceil(size_mesh / spacing).astype(int) + 1  # include endpoint
     grid = pv.ImageData(
         dimensions=nxyz,
         spacing=spacing,
-        origin=origin,
+        origin=origin_mesh,
     )
-    distancegrid = grid.compute_implicit_distance(mesh)
-    distances = distancegrid.point_data["implicit_distance"]
-    sdf = distances.reshape(grid.dimensions[::-1])  # (z,y,x)
+    if method == "mesh_to_sdf":
+        trimesh_mesh = trimesh.Trimesh(vertices=mesh.points, faces=mesh.faces.reshape((-1, 4))[:, 1:4])
+        points = grid.points
+        sdf_values = mesh_to_sdf.mesh_to_sdf(trimesh_mesh, points)
+    elif method == "implicit_distance":
+        distancegrid = grid.compute_implicit_distance(mesh)
+        sdf_values = distancegrid.point_data["implicit_distance"]
+    sdf = sdf_values.reshape(grid.dimensions[::-1])  # (z,y,x)
     voxel_diagonal = np.linalg.norm(spacing)
 
     epsilon = 0.1
@@ -187,6 +205,4 @@ def voxelize_mesh(mesh: pv.DataSet,
         inside = sdf < 0.0
         mask = inside | mask
 
-    # flip the y axis to match image coordinates #TODO is this necessary?
-    mask = np.flip(mask, axis=1)
     return mask.astype(np.uint8)
