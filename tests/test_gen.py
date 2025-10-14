@@ -62,6 +62,18 @@ def test_mesh():
     vs.save_nbt(f"{OUTPUT_DIR}/mesh_F", "structure")
     vs.save_schem(f"{OUTPUT_DIR}/mesh_F.schem")
 
+def replace_test():
+    vol = np.zeros((10, 10, 10), dtype=bool)
+    vol[1:5, 1:5, 1:5] = True
+    vs = VolumeStructure()
+    vs.add_layer(vol, "minecraft:stone")
+    vs.replace_block("minecraft:stone", "minecraft:dirt")
+    blocks = vs.get_blocks()
+    assert all(block.namespaced_name == "minecraft:dirt" for _, block in blocks)
+    vs.replace_block("minecraft:dirt", None)
+    blocks = vs.get_blocks()
+    assert len(blocks) == 0
+    
 
 if __name__ == "__main__":
     test_small_volume()
@@ -70,3 +82,4 @@ if __name__ == "__main__":
     test_schem()
     test_split()
     test_mesh()
+    replace_test()

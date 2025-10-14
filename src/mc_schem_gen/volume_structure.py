@@ -18,7 +18,29 @@ class VolumeStructure:
         self._max_y = max(self._max_y, y)
         self._max_z = max(self._max_z, z)
 
-    def set_block(self, x: int, y: int, z: int, block: Block):
+    def _recompute_size(self):
+        self._max_x = self._max_y = self._max_z = -1
+        for (x, y, z) in self._blocks.keys():
+            self._update_size(x, y, z)
+
+    def _get_block_from_spec(self, block_spec: str, default_namespace: str = "minecraft") -> Block:
+        splitted = block_spec.split(":", 1)
+        if len(splitted) == 1:
+            ns = default_namespace
+            base = splitted[0]
+        else:
+            ns, base = splitted
+        return Block(ns, base)
+
+    def set_block(self, x: int, y: int, z: int, block: Block | str | None):
+        if block is None:
+            if (x, y, z) in self._blocks:
+                del self._blocks[(x, y, z)]
+                if x == self._max_x or y == self._max_y or z == self._max_z:
+                    self._recompute_size()
+            return
+        if isinstance(block, str):
+            block = self._get_block_from_spec(block)
         self._blocks[(x, y, z)] = block
         self._update_size(x, y, z)
     
@@ -26,15 +48,14 @@ class VolumeStructure:
         return self._blocks.get((x, y, z), Block("minecraft", "air"))
     
     def get_blocks(self):
-        return self._blocks.items()
+        return list(self._blocks.items())
     
     def get_volume_size(self):
         return (self._max_x + 1, self._max_y + 1, self._max_z + 1)
 
     def add_layer(self, volume: np.ndarray, block_spec: str):
-        """Add blocks for every True voxel in volume."""
-        ns, base = block_spec.split(":", 1)
-        block_obj = Block(ns, base)
+        """Add blocks for every True voxel in volume. The volume shape is Minecraft (x,y,z)."""
+        block_obj = self._get_block_from_spec(block_spec)
         it = np.ndindex(volume.shape)
         for x, y, z in it:
             if volume[x, y, z]:
@@ -42,10 +63,22 @@ class VolumeStructure:
     
     def add_points(self, points: np.ndarray, block_spec: str):
         """Add blocks for every (x,y,z) in points."""
-        ns, base = block_spec.split(":", 1)
-        block_obj = Block(ns, base)
+        block_obj = self._get_block_from_spec(block_spec)
         for x, y, z in points:
             self.set_block(x, y, z, block_obj)
+
+    def replace_block(self, old_block_spec: str, new_block_spec: str | None):
+        """Replace all instances of old_block_spec with new_block_spec. If new_block_spec is None, remove the block."""
+        old_block = self._get_block_from_spec(old_block_spec)
+        new_block = self._get_block_from_spec(new_block_spec) if new_block_spec is not None else None
+        for coord, block in self.get_blocks():
+            if block == old_block:
+                if new_block is None:
+                    del self._blocks[coord]
+                else:
+                    self.set_block(*coord, new_block)
+        if new_block is None: # recompute size
+            self._recompute_size()
 
     def add_schem(self, path: str):
         """
