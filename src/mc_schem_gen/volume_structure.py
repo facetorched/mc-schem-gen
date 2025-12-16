@@ -4,13 +4,15 @@ import os
 from amulet.api.block import Block
 import amulet
 from amulet_nbt import NamedTag, CompoundTag, ListTag, IntTag, StringTag
+from typing import BinaryIO
+from pathlib import Path
 
 
 class VolumeStructure:
-    def __init__(self, platform: str = "java", version: tuple = (1, 21, 8)):
+    def __init__(self, platform: str = "java", version: tuple = (1, 21, 5)):
         self.platform = platform
         self.version = version
-        self._blocks = {}   # (x,y,z) -> Block
+        self._blocks : dict[tuple[int, int, int], Block] = {}   # (x,y,z) -> Block
         self._max_x = self._max_y = self._max_z = -1
     
     def _update_size(self, x: int, y: int, z: int):
@@ -32,17 +34,8 @@ class VolumeStructure:
             ns, base = splitted
         return Block(ns, base)
 
-    def set_block(self, x: int, y: int, z: int, block: Block | str | None):
-        if block is None:
-            if (x, y, z) in self._blocks:
-                del self._blocks[(x, y, z)]
-                if x == self._max_x or y == self._max_y or z == self._max_z:
-                    self._recompute_size()
-            return
-        if isinstance(block, str):
-            block = self._get_block_from_spec(block)
-        self._blocks[(x, y, z)] = block
-        self._update_size(x, y, z)
+    def set_block(self, x: int, y: int, z: int, block: str | Block | None):
+        self.add_points([(x, y, z)], block)
     
     def get_block(self, x: int, y: int, z: int) -> Block:
         return self._blocks.get((x, y, z), Block("minecraft", "air"))
@@ -53,34 +46,50 @@ class VolumeStructure:
     def get_volume_size(self):
         return (self._max_x + 1, self._max_y + 1, self._max_z + 1)
 
-    def add_layer(self, volume: np.ndarray, block_spec: str):
+    def add_layer(self, volume: np.ndarray, block: str | Block | None):
         """Add blocks for every True voxel in volume. The volume shape is Minecraft (x,y,z)."""
-        block_obj = self._get_block_from_spec(block_spec)
-        it = np.ndindex(volume.shape)
-        for x, y, z in it:
-            if volume[x, y, z]:
-                self.set_block(x, y, z, block_obj)
+        coords = np.argwhere(volume)  # shape (N, 3) with columns [x, y, z]
+        if coords.size == 0:
+            return
+        self.add_points(coords, block)
     
-    def add_points(self, points: np.ndarray, block_spec: str):
+    def add_points(self, points: np.ndarray, block: str | Block | None):
         """Add blocks for every (x,y,z) in points."""
-        block_obj = self._get_block_from_spec(block_spec)
+        if points.size == 0:
+            return
+        points = np.asarray(points)
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError("points must be an array of shape (N, 3)")
+        if block is None:
+            for x, y, z in points:
+                if (int(x), int(y), int(z)) in self._blocks:
+                    del self._blocks[(int(x), int(y), int(z))]
+            self._recompute_size()
+            return
+        if isinstance(block, str):
+            block = self._get_block_from_spec(block)
         for x, y, z in points:
-            self.set_block(x, y, z, block_obj)
+            self._blocks[(int(x), int(y), int(z))] = block
+        max_x = int(points[:, 0].max())
+        max_y = int(points[:, 1].max())
+        max_z = int(points[:, 2].max())
+        self._update_size(max_x, max_y, max_z)
 
-    def replace_block(self, old_block_spec: str, new_block_spec: str | None):
+    def replace_block(self, old_block: str, new_block: str | None):
         """Replace all instances of old_block_spec with new_block_spec. If new_block_spec is None, remove the block."""
-        old_block = self._get_block_from_spec(old_block_spec)
-        new_block = self._get_block_from_spec(new_block_spec) if new_block_spec is not None else None
+        old_block = self._get_block_from_spec(old_block)
+        new_block = self._get_block_from_spec(new_block) if new_block is not None else None
         for coord, block in self.get_blocks():
             if block == old_block:
                 if new_block is None:
                     del self._blocks[coord]
                 else:
-                    self.set_block(*coord, new_block)
+                    self._blocks[coord] = new_block
         if new_block is None: # recompute size
             self._recompute_size()
 
     def add_schem(self, path: str):
+        # TODO optimize and correctly handle origin offsets
         """
         Load an existing Sponge schematic (.schem) file and merge its blocks
         into this VolumeStructure. Useful for converting schem -> nbt.
@@ -102,33 +111,54 @@ class VolumeStructure:
 
     def split_by_block(self):
         """Return a dictionary of block names and corresponding VolumeStructure objects."""
-        block_dict = {}
-        for (x, y, z), block in self._blocks.items():
+        block_dict : dict[str, VolumeStructure] = {}
+        for coord, block in self._blocks.items():
             block_name = block.namespaced_name
             if block_name not in block_dict:
                 block_dict[block_name] = VolumeStructure(self.platform, self.version)
-            block_dict[block_name].set_block(x, y, z, block)
+            block_dict[block_name].add_points([coord], block)
         return block_dict
 
-    def save_schem(self, filepath: str):
+    def save_schem(self, filepath: str | BinaryIO, method : str = "mcschematic"):
         """Save the structure as a Sponge schematic file at <filepath>."""
-        size_x, size_y, size_z = self.get_volume_size()
-        wrapper = amulet.level.formats.sponge_schem.SpongeSchemFormatWrapper(filepath)
-        bounds = amulet.api.selection.SelectionGroup(
-            amulet.api.selection.SelectionBox((0,0,0), (size_x, size_y, size_z))
-        )
-        wrapper.create_and_open(self.platform, self.version, bounds, overwrite=True)
-        wrapper.save()
-        wrapper.close()
-        level = amulet.load_level(filepath)
-        try:
-            dim = "main"
-            game_ver = (self.platform, self.version)
-            for (x, y, z), block in self._blocks.items():
-                level.set_version_block(x, y, z, dim, game_ver, block)
-            level.save()
-        finally:
-            level.close()
+        if method == "mcschematic":
+            try:
+                import mcschematic
+            except ImportError:
+                raise ImportError("mcschematic is required to save .schem files. Install it via 'pip install mcschematic'")
+            schem = mcschematic.MCSchematic()
+            for coord, block in self._blocks.items():
+                schem.setBlock(coord, block.namespaced_name)
+            path = Path(filepath)
+            assert self.platform == "java", "mcschematic only supports Java edition schematics"
+            try:
+                version = mcschematic.Version.__getattr__("JE_" + "_".join(map(str, self.version)))
+            except AttributeError:
+                raise ValueError(f"Unsupported Minecraft version for mcschematic: {self.version}")
+            schem.save(str(path.parent), str(path.name), version = version)
+        elif method == "amulet":
+            size_x, size_y, size_z = self.get_volume_size()
+            filepath = str(filepath)
+            print("creating schem file...")
+            wrapper = amulet.level.formats.sponge_schem.SpongeSchemFormatWrapper(filepath)
+            bounds = amulet.api.selection.SelectionGroup(
+                amulet.api.selection.SelectionBox((0,0,0), (size_x, size_y, size_z))
+            )
+            wrapper.create_and_open(self.platform, self.version, bounds, overwrite=True)
+            wrapper.save()
+            wrapper.close()
+            print("created schem file")
+            level = amulet.load_level(filepath)
+            print("loaded schem file. placing blocks...")
+            try:
+                dim = "main"
+                game_ver = (self.platform, self.version)
+                for (x, y, z), block in self._blocks.items():
+                    level.set_version_block(x, y, z, dim, game_ver, block)
+                level.save()
+                print("saved schem file")
+            finally:
+                level.close()
 
     def save_nbt(self, directory: str, base_name: str, dataversion: int = None, max_size: int = 48, filename_mode: str = "auto"):
         """
