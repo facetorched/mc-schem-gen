@@ -24,6 +24,8 @@ dependencies = [
     "amulet-core",
     "amulet-nbt",
     "pyvista",
-    "trimesh",
-    "mesh_to_sdf",
+    "mcschematic",
 ]
+
+[project.optional-dependencies]
+mesh_to_sdf = ["trimesh", "mesh_to_sdf"]

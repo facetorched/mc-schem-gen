@@ -1,8 +1,6 @@
 import numpy as np
 import pyvista as pv
 import tifffile
-import trimesh
-import mesh_to_sdf
 
 def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
     """
@@ -183,6 +181,11 @@ def voxelize_mesh(mesh: pv.DataSet,
         origin=origin_mesh,
     )
     if method == "mesh_to_sdf":
+        try:
+            import trimesh
+            import mesh_to_sdf
+        except ImportError:
+            raise ImportError("trimesh and mesh_to_sdf are required for 'mesh_to_sdf' method. Please install them via 'pip install trimesh mesh_to_sdf'.")
         trimesh_mesh = trimesh.Trimesh(vertices=mesh.points, faces=mesh.faces.reshape((-1, 4))[:, 1:4])
         points = grid.points
         sdf_values = mesh_to_sdf.mesh_to_sdf(trimesh_mesh, points)
