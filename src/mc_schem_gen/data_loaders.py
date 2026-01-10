@@ -4,19 +4,19 @@ import tifffile
 
 def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
     """
-    Convert raw array in ImageJ format z, y, x to boolean volume (x, z, y) = Minecraft (x, y, z) orientation.
+    Convert raw array in numpy/ImageJ format (z, y, x) = (Up, South, East) to boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
     
     Parameters
     ----------
     arr : ndarray
-        Input array in ImageJ format (z, y, x) or (z, y, x, c). Color channels are summed if present.
+        Input array in numpy/ImageJ format (z, y, x) or (z, y, x, c). Color channels are summed if present.
     true_value : optional
         The value to be considered as True in the boolean volume. If None, any non-zero value is True.
 
     Returns
     -------
     result : ndarray
-        Boolean volume in Minecraft orientation (x, z, y).
+        Boolean volume in Minecraft orientation (x, y, z) = (East, Up, South).
     """
     if arr.ndim == 4:  # drop color channels
         arr = arr.sum(axis=-1)
@@ -29,7 +29,7 @@ def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
 
 def read_tiff(path: str, true_value=None) -> np.ndarray:
     """
-    Read a multi-page TIFF file and return a boolean volume.
+    Read a multi-page TIFF file (z, y, x) = (Up, South, East) and return a boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
 
     Parameters
     ----------
@@ -47,7 +47,7 @@ def read_tiff(path: str, true_value=None) -> np.ndarray:
 
 def read_npy(path: str, true_value=None) -> np.ndarray:
     """
-    Read a NumPy .npy file and return a boolean volume.
+    Read a NumPy .npy file (z, y, x) = (Up, South, East) and return a boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
 
     Parameters
     ----------
@@ -65,15 +65,17 @@ def read_npy(path: str, true_value=None) -> np.ndarray:
 
 def read_mesh(filename: str,
               spacing: float = 1.0,
+              minimum: tuple = None,
+              maximum: tuple = None,
               origin: tuple = None,
-              size: tuple = None,
               ignore_clip=False,
               fill: bool = True,
+              flip_z: bool = True,
               edge_mode: str = "center",
               method: str = "mesh_to_sdf"
-              ) -> np.ndarray:
+              ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Load a mesh from any VTK-compatible file format and convert to a boolean voxel volume.
+    Load a mesh (x, y, z) = (East, North, Up) and convert to a boolean voxel volume in Minecraft coordinates (x, y, z) = (East, Up, South).
 
     Parameters
     ----------
@@ -81,14 +83,18 @@ def read_mesh(filename: str,
         Path to the mesh file.
     spacing : float or (3,) tuple, optional
         Absolute voxel spacing in mesh coordinates.
+    minimum : (3,) tuple, optional
+        Minimum bounds of the voxel grid in mesh coordinates. If None, uses mesh minimum bounds.
+    maximum : (3,) tuple, optional
+        Maximum bounds of the voxel grid in mesh coordinates. If None, uses mesh maximum bounds.
     origin : (3,) tuple, optional
-        Force a specific origin for lattice alignment. If None, uses mesh minimum bounds.
-    size : (3,) tuple, optional
-        Size of the voxel grid in mesh coordinates. If None, uses mesh bounds.
+        Origin in mesh coordinates. This is used to calculate the `position` output. If None, uses `minimum`. Default is None.
     ignore_clip : bool, optional
         If True, does not check if the mesh fits completely within the voxel grid. Default is False.
     fill : bool, optional
         If True, fill interior voxels. If False, only surface voxels. Default is True.
+    flip_z : bool, optional
+        If True, flip the z-axis in the output volume to match Minecraft conventions such that (x, y, z) = (East, Up, South). Default is True.
     edge_mode : {'center', 'inner', 'outer'}, optional
         'center' selects voxels whose centers are within the mesh surface,
         'inner' selects voxels whose centers are inside or touching the surface from inside,
@@ -98,48 +104,59 @@ def read_mesh(filename: str,
     
     Returns
     -------
-    result : ndarray
-        3D binary mask translated to Minecraft coordinates where True indicates presence of structure.
+    voxel_volume : (x, y, z) ndarray
+        3D boolean mask indicating voxel occupancy in Minecraft coordinates.
+    position : (3,) ndarray
+        Position of the voxel grid origin (zero index) in Minecraft coordinates relative to `origin`.
     """
-    return to_mc_bool_volume(
-        voxelize_mesh(
-            pv.read(filename),
-            spacing=spacing,
-            origin=origin,
-            size=size,
-            ignore_clip=ignore_clip,
-            fill=fill,
-            edge_mode=edge_mode,
-            method=method
-        ),
+    vol, position = voxelize_mesh(
+        filename,
+        spacing=spacing,
+        minimum=minimum,
+        maximum=maximum,
+        origin=origin,
+        ignore_clip=ignore_clip,
+        fill=fill,
+        flip_y=flip_z,
+        edge_mode=edge_mode,
+        method=method,
     )
+    voxel_volume = to_mc_bool_volume(vol)
+    position = position[[0, 2, 1]]  # to (x, y, z)
+    return voxel_volume, position
 
-def voxelize_mesh(mesh: pv.DataSet,
-                   spacing: float = 1.0,
+def voxelize_mesh(mesh: pv.PolyData | str,
+                   spacing: float | tuple = 1.0,
+                   minimum: tuple = None,
+                   maximum: tuple = None,
                    origin: tuple = None,
-                   size: tuple = None,
                    ignore_clip=False,
                    fill: bool = True,
+                   flip_y: bool = True,
                    edge_mode: str = "center",
                    method: str = "mesh_to_sdf"
-                   ) -> np.ndarray:
+                   ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Convert a surface mesh into voxel coordinates (interior, surface, or both).
+    Load a mesh (x, y, z) = (East, North, Up) and convert to a boolean voxel volume (z, y, x) = (Up, South, East).
     
     Parameters
     ----------
-    mesh : pyvista.DataSet
-        The surface mesh.
+    mesh : pyvista.PolyData or str
+        The surface mesh or path to the mesh file.
     spacing : float or (3,) tuple, optional
         Absolute voxel spacing in mesh coordinates.
+    minimum : (3,) tuple, optional
+        Minimum bounds of the voxel grid in mesh coordinates. If None, uses mesh minimum bounds.
+    maximum : (3,) tuple, optional
+        Maximum bounds of the voxel grid in mesh coordinates. If None, uses mesh maximum bounds.
     origin : (3,) tuple, optional
-        Force a specific origin for lattice alignment. If None, uses mesh minimum bounds.
-    size : (3,) tuple, optional
-        Size of the voxel grid in mesh coordinates. If None, uses mesh bounds.
+        Origin in mesh coordinates. This is used to calculate the `position` output. If None, uses `minimum`. Default is None.
     ignore_clip : bool, optional
         If True, does not check if the mesh fits completely within the voxel grid. Default is False.
     fill : bool, optional
         If True, fill interior voxels. If False, only surface voxels. Default is True.
+    flip_y : bool, optional
+        If True, flip the y-axis in the output volume to match numpy conventions such that (z, y, x) = (Up, South, East). Default is True.
     edge_mode : {'center', 'inner', 'outer'}, optional
         'center' selects voxels whose centers are within the mesh surface,
         'inner' selects voxels whose centers are inside or touching the surface from inside,
@@ -150,35 +167,37 @@ def voxelize_mesh(mesh: pv.DataSet,
     
     Returns
     -------
-    voxel_volume : (Z, Y, X) ndarray
-        3D binary mask indicating voxel occupancy.
+    voxel_volume : (z, y, x) ndarray
+        3D boolean mask indicating voxel occupancy.
+    position : (3,) ndarray
+        Position of the voxel grid origin (zero index) in voxel coordinates relative to `origin`.
     """
     # Ensure triangular mesh TODO: is this necessary?
     mesh = pv.PolyData(mesh).triangulate()
-    mins, maxs = mesh.bounds[::2], mesh.bounds[1::2]
-    origin_mesh = np.array(mins, dtype=float)
-    if origin is not None:
+    mins, maxs = np.array(mesh.bounds[::2], dtype=float), np.array(mesh.bounds[1::2], dtype=float)
+    min_mesh = mins.copy()
+    if minimum is not None:
         for i in range(3):
-            if origin[i] is not None:
-                origin_mesh[i] = origin[i]
-    size_mesh = np.array(maxs, dtype=float) - origin_mesh
-    if size is not None:
+            if minimum[i] is not None:
+                min_mesh[i] = minimum[i]
+    max_mesh = maxs.copy()
+    if maximum is not None:
         for i in range(3):
-            if size[i] is not None:
-                size_mesh[i] = size[i]
+            if maximum[i] is not None:
+                max_mesh[i] = maximum[i]
         
     if not ignore_clip:
-        if np.any(mins < origin_mesh):
-            raise ValueError(f"origin {origin_mesh} must be <= mesh minimum bounds {mins}. Use ignore_clip=True to override.")
-        if np.any(maxs > origin_mesh + size_mesh):
-            raise ValueError(f"origin + size {origin_mesh + size_mesh} must be >= mesh maximum bounds {maxs}. Use ignore_clip=True to override.")
+        if np.any(mins < min_mesh):
+            raise ValueError(f"minimum {min_mesh} must be <= the minimum bounds of the mesh {mins}. Use ignore_clip=True to override.")
+        if np.any(maxs > max_mesh):
+            raise ValueError(f"maximum {max_mesh} must be >= the maximum bounds of the mesh {maxs}. Use ignore_clip=True to override.")
         
     spacing = np.array((spacing, spacing, spacing), float) if np.isscalar(spacing) else np.array(spacing, float)
-    nxyz = np.ceil(size_mesh / spacing).astype(int) + 1  # include endpoint
+    nxyz = np.ceil((max_mesh - min_mesh) / spacing).astype(int) + 1  # include endpoint
     grid = pv.ImageData(
         dimensions=nxyz,
         spacing=spacing,
-        origin=origin_mesh,
+        origin=min_mesh,
     )
     if method == "mesh_to_sdf":
         try:
@@ -207,5 +226,15 @@ def voxelize_mesh(mesh: pv.DataSet,
     if fill:
         inside = sdf < 0.0
         mask = inside | mask
+    position = np.zeros(3)
+    if origin is not None:
+        vox_min = np.ceil(min_mesh / spacing).astype(int)
+        vox_origin = np.ceil(np.array(origin, dtype=float) / spacing).astype(int)
+        position = vox_min - vox_origin
+    if flip_y:
+        mask = mask[:, ::-1, :]
+        position[1] = - ((mask.shape[1] - 1) + position[1])
+    position = position[::-1].astype(int) # to (x, y, z)
+    voxel_volume = mask.astype(bool)
 
-    return mask.astype(np.uint8)
+    return voxel_volume, position

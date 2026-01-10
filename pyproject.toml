@@ -21,11 +21,10 @@ classifiers = [
 dependencies = [
     "numpy",
     "tifffile",
-    "amulet-core",
-    "amulet-nbt",
     "pyvista",
     "mcschematic",
 ]
 
 [project.optional-dependencies]
 mesh_to_sdf = ["trimesh", "mesh_to_sdf"]
+amulet = ["amulet-core"]

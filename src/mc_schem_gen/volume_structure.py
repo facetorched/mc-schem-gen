@@ -1,236 +1,296 @@
 import numpy as np
 import os
-
-from amulet.api.block import Block
-import amulet
-from amulet_nbt import NamedTag, CompoundTag, ListTag, IntTag, StringTag
 from typing import BinaryIO
-from pathlib import Path
+from mcschematic import MCSchematic, MCStructure, Version
+from nbtlib.tag import *
+from nbtlib import File, parse_nbt
 
-
-class VolumeStructure:
-    def __init__(self, platform: str = "java", version: tuple = (1, 21, 5)):
-        self.platform = platform
-        self.version = version
-        self._blocks : dict[tuple[int, int, int], Block] = {}   # (x,y,z) -> Block
-        self._max_x = self._max_y = self._max_z = -1
-    
-    def _update_size(self, x: int, y: int, z: int):
-        self._max_x = max(self._max_x, x)
-        self._max_y = max(self._max_y, y)
-        self._max_z = max(self._max_z, z)
-
-    def _recompute_size(self):
-        self._max_x = self._max_y = self._max_z = -1
-        for (x, y, z) in self._blocks.keys():
-            self._update_size(x, y, z)
-
-    def _get_block_from_spec(self, block_spec: str, default_namespace: str = "minecraft") -> Block:
-        splitted = block_spec.split(":", 1)
-        if len(splitted) == 1:
-            ns = default_namespace
-            base = splitted[0]
+class VolumeStructure(MCSchematic):
+    def __init__(self, schematicToLoadPath_or_mcStructure: str | MCStructure = None, version: 'Version' = None):
+        if isinstance(schematicToLoadPath_or_mcStructure, str):
+            schematicToLoadPath = schematicToLoadPath_or_mcStructure
+            if not os.path.isfile(schematicToLoadPath):
+                raise FileNotFoundError(f"Schematic file not found: {schematicToLoadPath}")
+            if schematicToLoadPath.endswith(".schem"):
+                self._initFromFile(schematicToLoadPath)
+            else:
+                try:
+                    import amulet
+                except ImportError:
+                    raise ImportError("To load non .schem files, please install the 'amulet-core' package")
+                level = amulet.load_level(os.path.abspath(schematicToLoadPath))
+                dim = "main"
+                sel = level.bounds(dim)
+                self._defaultInit()
+                version = ("java", version.value) if version is not None else ("java", self.getLatestVersion().value)
+                for x in range(sel.min_x, sel.max_x):
+                    for y in range(sel.min_y, sel.max_y):
+                        for z in range(sel.min_z, sel.max_z):
+                            block, blockEntity = level.get_version_block(x, y, z, dim, version=version)
+                            if block.namespaced_name != "minecraft:air":
+                                self.setBlock((x, y, z), block.full_blockstate)
+                level.close()
         else:
-            ns, base = splitted
-        return Block(ns, base)
+            super().__init__(schematicToLoadPath_or_mcStructure)
 
-    def set_block(self, x: int, y: int, z: int, block: str | Block | None):
-        self.add_points([(x, y, z)], block)
-    
-    def get_block(self, x: int, y: int, z: int) -> Block:
-        return self._blocks.get((x, y, z), Block("minecraft", "air"))
-    
-    def get_blocks(self):
-        return list(self._blocks.items())
-    
-    def get_volume_size(self):
-        return (self._max_x + 1, self._max_y + 1, self._max_z + 1)
-
-    def add_layer(self, volume: np.ndarray, block: str | Block | None):
+    def placeVolume(self, volume: np.ndarray, blockData: str | None, placePosition: tuple[int, int, int] = (0, 0, 0)):
         """Add blocks for every True voxel in volume. The volume shape is Minecraft (x,y,z)."""
-        coords = np.argwhere(volume)  # shape (N, 3) with columns [x, y, z]
-        if coords.size == 0:
+        positions = np.argwhere(volume)  # shape (N, 3) with columns [x, y, z]
+        if positions.size == 0:
             return
-        self.add_points(coords, block)
+        positions += np.array(placePosition)  # offset coordinates
+        self.setBlocks(positions, blockData)
     
-    def add_points(self, points: np.ndarray, block: str | Block | None):
+    def setBlocks(self, positions: np.ndarray, blockData: str | None):
         """Add blocks for every (x,y,z) in points."""
-        if points.size == 0:
+        positions = np.asarray(positions)
+        if positions.size == 0:
             return
-        points = np.asarray(points)
-        if points.ndim != 2 or points.shape[1] != 3:
-            raise ValueError("points must be an array of shape (N, 3)")
-        if block is None:
-            for x, y, z in points:
-                if (int(x), int(y), int(z)) in self._blocks:
-                    del self._blocks[(int(x), int(y), int(z))]
-            self._recompute_size()
+        positions = np.asarray(positions)
+        if positions.ndim != 2 or positions.shape[1] != 3:
+            raise ValueError("positions must be an array of shape (N, 3)")
+        if blockData is None:
+            for x, y, z in positions:
+                pos = (int(x), int(y), int(z))
+                if pos in self._structure._blockStates:
+                    del self._structure._blockStates[pos]
+                if pos in self._structure._blockEntities:
+                    del self._structure._blockEntities[pos]
             return
-        if isinstance(block, str):
-            block = self._get_block_from_spec(block)
-        for x, y, z in points:
-            self._blocks[(int(x), int(y), int(z))] = block
-        max_x = int(points[:, 0].max())
-        max_y = int(points[:, 1].max())
-        max_z = int(points[:, 2].max())
-        self._update_size(max_x, max_y, max_z)
+        for x, y, z in positions:
+            self.setBlock((int(x), int(y), int(z)), blockData) # TODO slightly inefficient but simple
 
-    def replace_block(self, old_block: str, new_block: str | None):
-        """Replace all instances of old_block_spec with new_block_spec. If new_block_spec is None, remove the block."""
-        old_block = self._get_block_from_spec(old_block)
-        new_block = self._get_block_from_spec(new_block) if new_block is not None else None
-        for coord, block in self.get_blocks():
-            if block == old_block:
-                if new_block is None:
-                    del self._blocks[coord]
-                else:
-                    self._blocks[coord] = new_block
-        if new_block is None: # recompute size
-            self._recompute_size()
+    def getBlocks(self):
+        """Return a dictionary of positions to block names."""
+        block_dict : dict[tuple[int, int, int], str] = {}
+        for pos, _blockPaletteId in self._structure.getBlockStates().items():
+            block_dict[pos] = self.getBlockDataAt(pos)
+        return block_dict
+    
+    def getBlockName(self, blockData: str | None) -> str | None:
+        """Get the block name from blockData string. If blockData is None, return None."""
+        if blockData is None:
+            return None
+        return blockData.split("[")[0]  # Remove properties if present
 
-    def add_schem(self, path: str):
-        # TODO optimize and correctly handle origin offsets
-        """
-        Load an existing Sponge schematic (.schem) file and merge its blocks
-        into this VolumeStructure. Useful for converting schem -> nbt.
-        """
-        level = amulet.load_level(path)
-        try:
-            # Sponge schematics always use a "main" dimension
-            dim = "main"
-            # iterate all blocks in the level’s selection box
-            sel = level.bounds(dim)
-            for x in range(sel.min_x, sel.max_x):
-                for y in range(sel.min_y, sel.max_y):
-                    for z in range(sel.min_z, sel.max_z):
-                        block, _ = level.get_version_block(x, y, z, dim, (self.platform, self.version))
-                        if block.namespaced_name != "minecraft:air":
-                            self.set_block(x, y, z, block)
-        finally:
-            level.close()
+    def replaceBlocks(self, oldBlock: str, newBlock: str | None):
+        """Replace all instances of oldBlock with newBlock. If newBlock is None, remove the block."""
+        block_states_copy = dict(self._structure._blockStates)  # avoid modifying dict during iteration
+        if newBlock is None:
+            for pos, blockPaletteId in block_states_copy.items():
+                if self._structure._blockPalette[blockPaletteId] == oldBlock:
+                    if pos in self._structure._blockEntities:
+                        del self._structure._blockEntities[pos]
+                    del self._structure._blockStates[pos]
+            # remove from palette
+            blockPaletteId = self._structure._blockPalette[oldBlock]
+            del self._structure._blockPalette[oldBlock]
+            del self._structure._blockPalette[blockPaletteId]  
+        
+        else:
+            palette_copy = dict(self._structure._blockPalette)  # avoid modifying dict during iteration
+            # change the palette entry
+            blockPaletteId = self._structure._blockPalette[oldBlock]
+            self._structure._blockPalette[blockPaletteId] = newBlock
+            self._structure._blockPalette[newBlock] = self._structure._blockPalette.pop(oldBlock)
 
-    def split_by_block(self):
+            for pos, blockPaletteId in block_states_copy.items():
+                if palette_copy[blockPaletteId] == oldBlock:
+                    if pos in self._structure._blockEntities:
+                        del self._structure._blockEntities[pos]
+                    self.setBlock(pos, newBlock)
+
+    def splitByBlock(self):
         """Return a dictionary of block names and corresponding VolumeStructure objects."""
         block_dict : dict[str, VolumeStructure] = {}
-        for coord, block in self._blocks.items():
-            block_name = block.namespaced_name
+        for pos, blockPaletteId in self._structure.getBlockStates().items():
+            block_name = self._structure._blockPalette[blockPaletteId]
             if block_name not in block_dict:
-                block_dict[block_name] = VolumeStructure(self.platform, self.version)
-            block_dict[block_name].add_points([coord], block)
+                block_dict[block_name] = VolumeStructure()
+            block_dict[block_name].setBlock(pos, block_name) # TODO slightly inefficient but simple
         return block_dict
+    
+    def getLatestVersion(self) -> 'Version':
+        """Get the latest supported Minecraft version."""
+        return max(Version, key=lambda v: v.value)
 
-    def save_schem(self, filepath: str | BinaryIO, method : str = "mcschematic"):
-        """Save the structure as a Sponge schematic file at <filepath>."""
-        if method == "mcschematic":
-            try:
-                import mcschematic
-            except ImportError:
-                raise ImportError("mcschematic is required to save .schem files. Install it via 'pip install mcschematic'")
-            schem = mcschematic.MCSchematic()
-            for coord, block in self._blocks.items():
-                schem.setBlock(coord, block.namespaced_name)
-            path = Path(filepath)
-            assert self.platform == "java", "mcschematic only supports Java edition schematics"
-            try:
-                version = mcschematic.Version.__getattr__("JE_" + "_".join(map(str, self.version)))
-            except AttributeError:
-                raise ValueError(f"Unsupported Minecraft version for mcschematic: {self.version}")
-            schem.save(str(path.parent), str(path.name), version = version)
-        elif method == "amulet":
-            size_x, size_y, size_z = self.get_volume_size()
-            filepath = str(filepath)
-            print("creating schem file...")
-            wrapper = amulet.level.formats.sponge_schem.SpongeSchemFormatWrapper(filepath)
-            bounds = amulet.api.selection.SelectionGroup(
-                amulet.api.selection.SelectionBox((0,0,0), (size_x, size_y, size_z))
-            )
-            wrapper.create_and_open(self.platform, self.version, bounds, overwrite=True)
-            wrapper.save()
-            wrapper.close()
-            print("created schem file")
-            level = amulet.load_level(filepath)
-            print("loaded schem file. placing blocks...")
-            try:
-                dim = "main"
-                game_ver = (self.platform, self.version)
-                for (x, y, z), block in self._blocks.items():
-                    level.set_version_block(x, y, z, dim, game_ver, block)
-                level.save()
-                print("saved schem file")
-            finally:
-                level.close()
+    def save(self, filepath: str | BinaryIO, version: 'Version' = None, fastSaving: bool = False):
+        """Save the structure as a Sponge schematic file at `filepath`."""
+        # if filepath is a string, ensure directory exists
+        if isinstance(filepath, str):
+            directory = os.path.dirname(filepath)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
+            # add .schem extension if not present
+            if not filepath.lower().endswith('.schem'):
+                filepath += '.schem'
+        if version is None:
+            version = self.getLatestVersion()
+        #################### Start copied from MCSchematic #####################
+        ## Setup
+        schemBounds = self._structure.getBounds()
+        schemDims = self._structure.getStructureDimensions(schemBounds)
+        # The vector amount by which minBounds is offsetted from 0 0 0
+        schemOffset = schemBounds[0]
 
-    def save_nbt(self, directory: str, base_name: str, dataversion: int = None, max_size: int = 48, filename_mode: str = "auto"):
+        ## BLOCK PALETTE
+        ## We're doing the block palette early because it's gonna
+        ## be useful in knowing which algorithm to use in when saving
+        ## the blocks to the schematic
+        # Get a cleaner version of the block palette, without the duplicates used
+        # for back and forth O(1) access
+        self._structure.getBlockPalette()
+        cleanBlockPalette = self._structure.getBlockPalette()
+
+
+        ## BLOCK DATA
+        encodedBlockStates = self._getEncodedBlockStates(len(cleanBlockPalette),
+                                                         schemDims,
+                                                         schemOffset,
+                                                         fastSaving)
+
+
+        ## BLOCK ENTITIES
+        blockEntitiesCompounds = \
+            [
+                self._blockEntityStringToSchemCompound(
+                    (
+                        position[0] - schemOffset[0],
+                        position[1] - schemOffset[1],
+                        position[2] - schemOffset[2]
+                    ), blockEntityStr
+                )
+                for position, blockEntityStr in self._structure.getBlockEntities().items()
+            ]
+
+
+        ## Generate the schematic file from the byte array
+        ## From Fearless's code which was taken from someone else lOl
+        schematic = File({
+
+            'Version': Int(2),
+            'DataVersion': Int(version.value),
+            'Metadata': Compound({
+                'WEOffsetX': Int(schemOffset[0]),
+                'WEOffsetY': Int(schemOffset[1]),
+                'WEOffsetZ': Int(schemOffset[2]),
+                'MCSchematicMetadata': Compound({
+                    'Generated': String("Generated with love using Sloimay's MCSchematic Python Library, "
+                                        "itself dependant on Valentin Berlier's nbtlib library.")
+                })
+            }),
+
+            'Height': Short(schemDims[1]),
+            'Length': Short(schemDims[2]),
+            'Width': Short(schemDims[0]),
+
+            'PaletteMax': Int(len(cleanBlockPalette)),
+            'Palette': Compound(cleanBlockPalette),
+            'BlockData': ByteArray(encodedBlockStates),
+
+            'BlockEntities': List(blockEntitiesCompounds),
+
+        }, gzipped=True, root_name='Schematic')
+        #################### End copied from MCSchematic #####################
+
+        schematic.save(filepath)
+        
+
+    def saveNBT(self, filepath: str, version : 'Version' = None, max_size: int | tuple[int, int, int] | None = None, filename_mode: str = "auto"):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds max_size in any dimension, it will be split into multiple files.
 
         Parameters
         ----------
-        directory : str
-            Directory to save the .nbt files.
-        base_name : str
-            Base name for the .nbt files. If multiple files are created, they will be named
-            <base_name>_x_y_z.nbt where x,y,z are the tile indices.
-        dataversion : int, optional
-            The DataVersion to include in the NBT file. If None, it will be omitted.
-        max_size : int, optional
-            Maximum size in each dimension for a single .nbt file. Default is 48.
+        filepath : str
+            Directory to save the .nbt files. If multiple files are created, they will be named
+            <filepath>_x_y_z.nbt where x,y,z are the tile indices.
+        version : 'Version', optional
+            The Version to include in the NBT file. If None, the latest version will be used.
+        max_size : int | tuple | None, optional
+            Maximum size in each dimension for a single .nbt file. If None, a single file will be created. Default is None.
         filename_mode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
         """
-        os.makedirs(directory, exist_ok=True)
-        size_x, size_y, size_z = self.get_volume_size()
-        nx = (size_x + max_size - 1) // max_size
-        ny = (size_y + max_size - 1) // max_size
-        nz = (size_z + max_size - 1) // max_size
+        # ensure directory exists
+        directory = os.path.dirname(filepath)
+        base_name = os.path.basename(filepath)
+        if base_name.lower().endswith('.nbt'):
+            base_name = base_name[:-4]
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
+        if version is None:
+            version = self.getLatestVersion()
+        x_min, y_min, z_min = self._structure.getBounds()[0]
+        x_max, y_max, z_max = self._structure.getBounds()[1]
+        size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
+        if max_size is None:
+            max_size = (size_x, size_y, size_z)
+        elif isinstance(max_size, int):
+            max_size = (max_size, max_size, max_size)
+        nx = (size_x + max_size[0] - 1) // max_size[0]
+        ny = (size_y + max_size[1] - 1) // max_size[1]
+        nz = (size_z + max_size[2] - 1) // max_size[2]
 
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
-                    x0, y0, z0 = ix*max_size, iy*max_size, iz*max_size
-                    x1, y1, z1 = min(x0+max_size, size_x), min(y0+max_size, size_y), min(z0+max_size, size_z)
+                    x0, y0, z0 = ix*max_size[0] + x_min, iy*max_size[1] + y_min, iz*max_size[2] + z_min
+                    x1, y1, z1 = min(x0+max_size[0], x_max), min(y0+max_size[1], y_max), min(z0+max_size[2], z_max)
                     tile_size = (x1-x0, y1-y0, z1-z0)
 
-                    root = CompoundTag()
-                    if dataversion:
-                        root["DataVersion"] = IntTag(dataversion)
-                    root["size"] = ListTag([IntTag(tile_size[0]), IntTag(tile_size[1]), IntTag(tile_size[2])])
+                    root = Compound()
+                    root["DataVersion"] = Int(version.value)
+                    root["size"] = List[Int]([Int(tile_size[0]), Int(tile_size[1]), Int(tile_size[2])])
 
                     # Palette
-                    palette = ListTag()
+                    palette = List[Compound]()
                     palette_index = {}
                     # Always include air
-                    palette.append(CompoundTag({"Name": StringTag("minecraft:air")}))
+                    palette.append(Compound({"Name": String("minecraft:air")}))
                     palette_index["minecraft:air"] = 0
                     next_index = 1
 
                     # Blocks
-                    blocks = ListTag()
-                    for (x,y,z), block in self._blocks.items():
+                    blocks = List[Compound]()
+                    
+                    for (x,y,z), block in self.getBlocks().items():
                         if x0 <= x < x1 and y0 <= y < y1 and z0 <= z < z1:
                             rel = (x-x0, y-y0, z-z0)
-                            name = block.namespaced_name
-                            if name not in palette_index:
-                                entry = CompoundTag({"Name": StringTag(name)})
-                                if block.properties:
-                                    props = CompoundTag()
-                                    for k,v in block.properties.items():
-                                        props[k] = StringTag(str(v))
+                            
+                            if block not in palette_index:
+                                block_name = block.split("[")[0]
+                                entry = Compound({"Name": String(block_name)})
+                                if block.find("[") != -1:
+                                    props_str = block[block.find("[")+1:block.find("]")]
+                                    props = Compound()
+                                    for prop in props_str.split(","):
+                                        if "=" in prop: # Safety check for malformed strings
+                                            key, value = prop.split("=")
+                                            props[key] = String(value)
                                     entry["Properties"] = props
                                 palette.append(entry)
-                                palette_index[name] = next_index
+                                palette_index[block] = next_index
                                 next_index += 1
-                            state = palette_index[name]
-                            btag = CompoundTag()
-                            btag["state"] = IntTag(state)
-                            btag["pos"] = ListTag([IntTag(rel[0]), IntTag(rel[1]), IntTag(rel[2])])
+                            
+                            state = palette_index[block]
+                            btag = Compound()
+                            btag["state"] = Int(state)
+                            btag["pos"] = List[Int]([Int(rel[0]), Int(rel[1]), Int(rel[2])])
+                            
+                            if (x,y,z) in self._structure._blockEntities:
+                                blockEntityString = self._structure._blockEntities[(x,y,z)]
+                                if "{" in blockEntityString:
+                                    nbtPortion = blockEntityString[blockEntityString.find("{"):] 
+                                    btag["nbt"] = parse_nbt(nbtPortion)
+                                    
                             blocks.append(btag)
 
                     root["palette"] = palette
                     root["blocks"] = blocks
-                    root["entities"] = ListTag()
+                    root["entities"] = List[Compound]() # TODO: Add support for entities
 
                     # Save
                     if nx>1 or ny>1 or nz>1 or filename_mode == "indexed":
@@ -238,5 +298,7 @@ class VolumeStructure:
                     elif filename_mode == "auto":
                         fname = f"{base_name}.nbt"
                     path = os.path.join(directory, fname)
-                    NamedTag(root, name="").save_to(path, compressed=True, little_endian=False)
+                    
+                    nbt_file = File(root, gzipped=True, root_name="Schematic")
+                    nbt_file.save(path)
                     print(f"Saved {path} ({tile_size})")
