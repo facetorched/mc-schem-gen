@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "setuptools>=43",
+    "setuptools>=65",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -28,3 +28,6 @@ dependencies = [
 [project.optional-dependencies]
 mesh_to_sdf = ["trimesh", "mesh_to_sdf"]
 amulet = ["amulet-core"]
+
+[tool.setuptools.package-data]
+mc_schem_gen = ["data/block_colormaps/*.csv"]

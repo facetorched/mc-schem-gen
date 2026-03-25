@@ -57,7 +57,7 @@ def test_mesh():
     vs.saveNBT(f"{OUTPUT_DIR}/mesh_f.nbt")
     vs.save(f"{OUTPUT_DIR}/mesh_f.schem")
     vol2, pos2 = read_mesh("tests/data/letter_F.vtk", spacing=0.1, minimum=(-2.0, -2.0, 0), origin=(0, 0, 0))
-    assert np.array_equal(pos2, np.array([0, -20, -20]))
+    assert np.array_equal(pos2, np.array([-20, 0, -20]))
     vs2 = VolumeStructure()
     vs2.placeVolume(vol2, "minecraft:blue_stained_glass", placePosition=pos2)
     vs2.saveNBT(f"{OUTPUT_DIR}/mesh_f_origin.nbt")

@@ -122,7 +122,7 @@ def read_mesh(filename: str,
         method=method,
     )
     voxel_volume = to_mc_bool_volume(vol)
-    position = position[[0, 2, 1]]  # to (x, y, z)
+    position = position[[2, 0, 1]]  # (Up, South, East) to (East, Up, South)
     return voxel_volume, position
 
 def voxelize_mesh(mesh: pv.PolyData | str,
@@ -173,7 +173,12 @@ def voxelize_mesh(mesh: pv.PolyData | str,
         Position of the voxel grid origin (zero index) in voxel coordinates relative to `origin`.
     """
     # Ensure triangular mesh TODO: is this necessary?
-    mesh = pv.PolyData(mesh).triangulate()
+    mesh = pv.read(mesh) if isinstance(mesh, str) else mesh
+    if isinstance(mesh, pv.MultiBlock):
+        mesh = mesh.extract_geometry()
+    elif not isinstance(mesh, pv.PolyData):
+        mesh = pv.PolyData(mesh) # last resort
+    mesh = mesh.triangulate()
     mins, maxs = np.array(mesh.bounds[::2], dtype=float), np.array(mesh.bounds[1::2], dtype=float)
     min_mesh = mins.copy()
     if minimum is not None:
@@ -226,15 +231,15 @@ def voxelize_mesh(mesh: pv.PolyData | str,
     if fill:
         inside = sdf < 0.0
         mask = inside | mask
-    position = np.zeros(3)
+    position = np.zeros(3, dtype=int)
     if origin is not None:
         vox_min = np.ceil(min_mesh / spacing).astype(int)
         vox_origin = np.ceil(np.array(origin, dtype=float) / spacing).astype(int)
         position = vox_min - vox_origin
+        position = position[::-1] # to (z, y, x)
     if flip_y:
         mask = mask[:, ::-1, :]
         position[1] = - ((mask.shape[1] - 1) + position[1])
-    position = position[::-1].astype(int) # to (x, y, z)
     voxel_volume = mask.astype(bool)
 
     return voxel_volume, position

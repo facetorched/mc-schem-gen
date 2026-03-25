@@ -1,6 +1,6 @@
 import numpy as np
 import os
-from typing import BinaryIO
+from typing import BinaryIO, Sequence
 from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
@@ -33,15 +33,17 @@ class VolumeStructure(MCSchematic):
         else:
             super().__init__(schematicToLoadPath_or_mcStructure)
 
-    def placeVolume(self, volume: np.ndarray, blockData: str | None, placePosition: tuple[int, int, int] = (0, 0, 0)):
+    def placeVolume(self, volume: np.ndarray, blockData: str | None, colors: np.ndarray | None = None, placePosition: tuple[int, int, int] = (0, 0, 0)):
         """Add blocks for every True voxel in volume. The volume shape is Minecraft (x,y,z)."""
+        volume = np.asarray(volume, dtype=bool)
         positions = np.argwhere(volume)  # shape (N, 3) with columns [x, y, z]
         if positions.size == 0:
             return
         positions += np.array(placePosition)  # offset coordinates
+        _colors = colors[volume] if colors is not None else None
         self.setBlocks(positions, blockData)
     
-    def setBlocks(self, positions: np.ndarray, blockData: str | None):
+    def setBlocks(self, positions: np.ndarray, blockData: str | Sequence[str] | None):
         """Add blocks for every (x,y,z) in points."""
         positions = np.asarray(positions)
         if positions.size == 0:
@@ -57,13 +59,17 @@ class VolumeStructure(MCSchematic):
                 if pos in self._structure._blockEntities:
                     del self._structure._blockEntities[pos]
             return
-        for x, y, z in positions:
-            self.setBlock((int(x), int(y), int(z)), blockData) # TODO slightly inefficient but simple
+        if isinstance(blockData, str):
+            for x, y, z in positions:
+                self.setBlock((int(x), int(y), int(z)), blockData) # TODO slightly inefficient but simple
+        else:
+            for (x, y, z), bd in zip(positions, blockData):
+                self.setBlock((int(x), int(y), int(z)), bd)
 
     def getBlocks(self):
         """Return a dictionary of positions to block names."""
         block_dict : dict[tuple[int, int, int], str] = {}
-        for pos, _blockPaletteId in self._structure.getBlockStates().items():
+        for pos in self._structure.getBlockStates().keys():
             block_dict[pos] = self.getBlockDataAt(pos)
         return block_dict
     
@@ -117,7 +123,8 @@ class VolumeStructure(MCSchematic):
     def save(self, filepath: str | BinaryIO, version: 'Version' = None, fastSaving: bool = False):
         """Save the structure as a Sponge schematic file at `filepath`."""
         # if filepath is a string, ensure directory exists
-        if isinstance(filepath, str):
+        if isinstance(filepath, (str, os.PathLike)):
+            filepath = str(filepath)
             directory = os.path.dirname(filepath)
             if directory and not os.path.exists(directory):
                 os.makedirs(directory)
