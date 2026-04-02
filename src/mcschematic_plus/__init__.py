@@ -10,4 +10,4 @@ from .data_loaders import (
     read_mesh,
     voxelize_mesh,
 )
-from .block_colormap import BlockColormap, get_internal_colormap
+from .block_colormap import BlockColormap, get_block_colormap

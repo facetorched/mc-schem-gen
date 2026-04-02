@@ -5,46 +5,31 @@ from numpy.typing import ArrayLike
 from importlib.resources import files
 
 _INTERNAL_COLORMAPS = {}
-
-def get_internal_colormap(name: str) -> 'BlockColormap':
-    """
-    Returns a BlockColormap object for one of the provided colormaps.
-    Loads the colormap from the package data on first request and caches it for future use.
-
-    Parameters
-    ----------
-    name : str 
-        Name of the colormap. Options are 'standard', 'all', 'smooth'.
-
-    Returns
-    -------
-    colormap : BlockColormap
-        The requested BlockColormap object.
-    """
-    if name not in _INTERNAL_COLORMAPS:
-        _INTERNAL_COLORMAPS[name] = BlockColormap(files("mc_schem_gen").joinpath(f"data/block_colormaps/{name}.csv"))
-    return _INTERNAL_COLORMAPS[name]
-
+_HEADER_ITEMS = ["block_state", "r", "g", "b", "a"]
 
 class BlockColormap:
     def __init__(self, csv_path):
+        """
+        Initializes the BlockColormap by loading block states and their corresponding colors from a CSV file.
+        The CSV must have the following columns: 'block_state', 'r', 'g', 'b', 'a'. The RGBA values should be in the range [0, 255].
+        """
         bs : list[str] = []
         cs : list[tuple[int, int, int]] = []
         alphas : list[int] = []
         with open(csv_path, 'r') as f:
             reader = csv.reader(f)
             header = next(reader)
-            block_state_idx = header.index("block_state")
-            r_idx = header.index("r")
-            g_idx = header.index("g")
-            b_idx = header.index("b")
-            a_idx = header.index("a")
+            header_indexes = {}
+            for item in _HEADER_ITEMS:
+                if item not in header:
+                    raise ValueError(f"Colormap CSV is missing required column '{item}'")
+                header_indexes[item] = header.index(item)
             for row in reader:
-                block_state = row[block_state_idx]
-                r = int(float(row[r_idx]))
-                g = int(float(row[g_idx]))
-                b = int(float(row[b_idx]))
-                a = int(float(row[a_idx]))
+                block_state = row[header_indexes["block_state"]]
+                r = int(float(row[header_indexes["r"]]))
+                g = int(float(row[header_indexes["g"]]))
+                b = int(float(row[header_indexes["b"]]))
+                a = int(float(row[header_indexes["a"]]))
                 bs.append(block_state)
                 cs.append((r, g, b))
                 alphas.append(a)
@@ -93,3 +78,27 @@ class BlockColormap:
     @property
     def alphas(self) -> np.ndarray:
         return self._alphas
+    
+def get_block_colormap(name: str | BlockColormap) -> BlockColormap:
+    """
+    Returns a BlockColormap object for one of the provided colormaps.
+    Loads the colormap from the package data on first request and caches it for future use.
+
+    Parameters
+    ----------
+    name : str | BlockColormap
+        Name of the colormap. Options are 'standard', 'all', 'smooth' or a path to a custom 
+        colormap CSV file. If a BlockColormap object is provided, it is returned directly.
+
+    Returns
+    -------
+    colormap : BlockColormap
+        The requested BlockColormap object.
+    """
+    if isinstance(name, BlockColormap):
+        return name
+    if ".csv" in name:
+        return BlockColormap(name)
+    if name not in _INTERNAL_COLORMAPS:
+        _INTERNAL_COLORMAPS[name] = BlockColormap(files("mcschematic_plus").joinpath(f"data/block_colormaps/{name}.csv"))
+    return _INTERNAL_COLORMAPS[name]

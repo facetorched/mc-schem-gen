@@ -4,6 +4,8 @@ from typing import BinaryIO, Sequence
 from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
+from .block_colormap import BlockColormap, get_block_colormap
+from pyvista import ImageData, UnstructuredGrid, Plotter
 
 class MCSchematicPlus(MCSchematic):
     def __init__(self, schematicToLoadPath_or_mcStructure: str | MCStructure = None, version: 'Version' = None):
@@ -309,3 +311,73 @@ class MCSchematicPlus(MCSchematic):
                     nbt_file = File(root, gzipped=True, root_name="Schematic")
                     nbt_file.save(path)
                     print(f"Saved {path} ({tile_size})")
+
+    def toMesh(self, block_colormap: str | BlockColormap | None = "all"):
+        """
+        Convert to a pyvista UnstructuredGrid mesh for visualization.
+
+        Parameters
+        ----------
+        block_colormap : str | BlockColormap | None, optional
+            Colormap to use for coloring blocks. If None, all blocks will be gray. Default is "all".
+        
+        Returns
+        -------
+        pyvista.UnstructuredGrid
+        """
+        bounds = np.array(self.getStructure().getBounds())
+        shape = bounds[1] - bounds[0] + 1 # +1 because bounds are inclusive
+        blocks = self.getBlocks()
+        cmap = get_block_colormap(block_colormap) if block_colormap is not None else None
+        mask_3d = np.zeros(shape, dtype=bool)
+        colors_3d = np.zeros(tuple(shape) + (3,), dtype=np.uint8)
+        alphas_3d = np.zeros(shape, dtype=np.uint8)
+        for pos, block in blocks.items():
+            if block == "minecraft:air":
+                continue
+            pos = tuple(np.array(pos) - bounds[0])
+            mask_3d[pos] = True
+            if cmap is None: # if no colormap, use opaque gray for all blocks
+                colors_3d[pos] = (128, 128, 128)
+                alphas_3d[pos] = 255
+            else:
+                colors_3d[pos] = cmap.get_color(block)
+                alphas_3d[pos] = cmap.get_alpha(block)
+
+        grid = ImageData(dimensions=np.array(shape)+1, spacing=(1, 1, 1))
+        rgba_3d = np.zeros(tuple(shape) + (4,), dtype=np.uint8)
+        rgba_3d[..., :3] = colors_3d
+        rgba_3d[..., 3] = alphas_3d
+
+        grid.cell_data["mask"] = mask_3d.flatten(order='F')
+        grid.cell_data["colors"] = rgba_3d.reshape(-1, 4, order='F')
+        mesh: UnstructuredGrid = grid.threshold(0.5, scalars="mask", invert=False)
+        mesh.translate(bounds[0], inplace=True) # translate back to world coordinates
+        return mesh
+    
+    def show(self, block_colormap: str | BlockColormap | None = "all", plotter: Plotter | None = None, **kwargs):
+        """
+        Visualize using pyvista.
+
+        Parameters
+        ----------
+        block_colormap : str | BlockColormap | None, optional
+            Colormap to use for coloring blocks. If None, all blocks will be gray. Default is "all".
+        plotter : pyvista.Plotter, optional
+            An existing pyvista Plotter to use for visualization. If None, a new Plotter will be created. Default is None.
+        **kwargs
+            Additional keyword arguments to pass to pyvista.Plotter.show()
+        
+        Returns
+        -------
+        pyvista.Plotter
+            The Plotter used for visualization.
+        """
+        mesh = self.toMesh(block_colormap)
+        p = plotter if plotter is not None else Plotter()
+        p.add_mesh(mesh, scalars="colors", rgb=True)
+        p.camera_position = 'xy'
+        p.camera.elevation = 45
+        p.show_axes()
+        p.show(**kwargs)
+        return p
