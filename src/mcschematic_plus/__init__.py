@@ -1,8 +1,8 @@
 """
-mc-schem-gen: Generate Minecraft .schem and .nbt structures from 3D images.
+Generate Minecraft .schem and .nbt structures from data.
 """
 
-from .volume_structure import VolumeStructure
+from .mcschematic_plus import MCSchematicPlus
 from .data_loaders import (
     to_mc_bool_volume,
     read_tiff,

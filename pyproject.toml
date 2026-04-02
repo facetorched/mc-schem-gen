@@ -5,7 +5,7 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mc-schem-gen"
+name = "mcschematic-plus"
 version = "0.0.1"
 description = "Generate Minecraft schem and nbt structures from 3D image data"
 readme = "README.md"
@@ -30,4 +30,4 @@ mesh_to_sdf = ["trimesh", "mesh_to_sdf"]
 amulet = ["amulet-core"]
 
 [tool.setuptools.package-data]
-mc_schem_gen = ["data/block_colormaps/*.csv"]
+mcschematic_plus = ["data/block_colormaps/*.csv"]

@@ -5,7 +5,7 @@ from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
 
-class VolumeStructure(MCSchematic):
+class MCSchematicPlus(MCSchematic):
     def __init__(self, schematicToLoadPath_or_mcStructure: str | MCStructure = None, version: 'Version' = None):
         if isinstance(schematicToLoadPath_or_mcStructure, str):
             schematicToLoadPath = schematicToLoadPath_or_mcStructure
@@ -107,12 +107,12 @@ class VolumeStructure(MCSchematic):
                     self.setBlock(pos, newBlock)
 
     def splitByBlock(self):
-        """Return a dictionary of block names and corresponding VolumeStructure objects."""
-        block_dict : dict[str, VolumeStructure] = {}
+        """Return a dictionary of block names and corresponding MCSchematicPlus objects."""
+        block_dict : dict[str, MCSchematicPlus] = {}
         for pos, blockPaletteId in self._structure.getBlockStates().items():
             block_name = self._structure._blockPalette[blockPaletteId]
             if block_name not in block_dict:
-                block_dict[block_name] = VolumeStructure()
+                block_dict[block_name] = MCSchematicPlus()
             block_dict[block_name].setBlock(pos, block_name) # TODO slightly inefficient but simple
         return block_dict
     

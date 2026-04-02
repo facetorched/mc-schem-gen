@@ -1,9 +1,9 @@
-**mc-schem-gen** is a library for writing Minecraft schematics (.schem) and structures (.nbt) from ndarray or image data.
+**mcschematic-plus** is a library that extends the functionality of [mcschematic](https://github.com/Sloimayyy/mcschematic) for creating Minecraft schematics (.schem) and structures (.nbt) from ndarray, image or 3D model data.
 
 # Installing
 Clone this repository into a local directory.
 ```sh
-git clone https://github.com/facetorched/mc-schem-gen.git
+git clone https://github.com/facetorched/mcschematic-plus.git
 ```
 Navagate into the repository and install the package locally. Optionally making it editable by including the `-e` flag.
 ```sh
@@ -11,12 +11,12 @@ pip install -e .
 ```
 
 # Usage
-The class `VolumeStructure` offers the main functionality of the package.
+The class `MCSchematicPlus` offers the main functionality of the package and is a drop-in replacement for `MCSchematic`.
 
 ```python
-from mc_schem_gen import VolumeStructure, read_tiff
+from mcschematic_plus import MCSchematicPlus
 
-vs = VolumeStructure()
+vs = MCSchematicPlus()
 # Load and add a layer from a TIFF image
 vs.add_layer(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
 # Load and add a layer from an existing schematic file
