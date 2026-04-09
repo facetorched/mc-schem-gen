@@ -1,14 +1,17 @@
 import csv
+from typing import Sequence
 import numpy as np
+import os
 from scipy.spatial import KDTree
-from numpy.typing import ArrayLike
 from importlib.resources import files
+from PIL import ImageColor
 
-_INTERNAL_COLORMAPS = {}
+_loaded_internal_colormaps = {}
+_INTERNAL_COLORMAPS = ["standard", "all", "smooth"]
 _HEADER_ITEMS = ["block_state", "r", "g", "b", "a"]
 
 class BlockColormap:
-    def __init__(self, csv_path):
+    def __init__(self, csv_path: str | os.PathLike):
         """
         Initializes the BlockColormap by loading block states and their corresponding colors from a CSV file.
         The CSV must have the following columns: 'block_state', 'r', 'g', 'b', 'a'. The RGBA values should be in the range [0, 255].
@@ -16,6 +19,7 @@ class BlockColormap:
         bs : list[str] = []
         cs : list[tuple[int, int, int]] = []
         alphas : list[int] = []
+        self._dict : dict[str, tuple[int, int, int, int]] = {} # reverse lookup for get_rgb, get_alpha
         with open(csv_path, 'r') as f:
             reader = csv.reader(f)
             header = next(reader)
@@ -33,61 +37,64 @@ class BlockColormap:
                 bs.append(block_state)
                 cs.append((r, g, b))
                 alphas.append(a)
+                self._dict[block_state] = (r, g, b, a)
         self._block_states = np.array(bs)
         self._colors = np.array(cs)
         self._tree = KDTree(self._colors)
         self._alphas = np.array(alphas) # for now we don't query based on alpha
-        self._map_cache = {}
+        self._map_cache : dict[tuple[int, int, int], str] = {} # cache for get_block to speed up repeated lookups
 
-    def get_block(self, rgb : ArrayLike) -> str:
+    def get_block_state(self, rgb : Sequence[int] | np.ndarray | str) -> str:
         """
         Returns the closest matching block_state for the given (R, G, B) color or array of colors.
+        Caching is used for single color lookups to speed up repeated queries.
         """
-        if rgb in self._map_cache:
-            return self._map_cache[rgb]
+        rgb = np.asarray(rgb)
+        if np.issubdtype(rgb.dtype, np.number):
+            rgb = rgb.astype(int)
+        else:
+            vfunc = np.vectorize(ImageColor.getrgb) # convert color names to RGB tuples
+            rgb = np.asarray(vfunc(rgb))
+        rgb = rgb[..., :3]
+        if rgb.ndim == 1:
+            try:
+                return self._map_cache[tuple(rgb)]
+            except KeyError:
+                pass
+        # ignore alpha channel if present
         _dist, index = self._tree.query(rgb, k=1)
-        self._map_cache[rgb] = self._block_states[index]
+        if rgb.ndim == 1:
+            self._map_cache[tuple(rgb)] = self._block_states[index]
         return self._block_states[index]
     
-    def get_color(self, block_state: str) -> np.ndarray:
+    def get_rgba(self, block_state: str) -> np.ndarray:
+        """
+        Returns the (R, G, B, A) color for the given block_state.
+        """
+        if block_state not in self._dict:
+            raise ValueError(f"Block state {block_state} not found in colormap.")
+        return np.array(self._dict[block_state])
+    
+    def get_rgb(self, block_state: str) -> np.ndarray:
         """
         Returns the (R, G, B) color for the given block_state.
         """
-        index = np.where(self._block_states == block_state)[0]
-        if len(index) == 0:
-            raise ValueError(f"Block state {block_state} not found in colormap.")
-        return self._colors[index[0]]
+        return self.get_rgba(block_state)[:3]
     
     def get_alpha(self, block_state: str) -> int:
         """
-        Returns the alpha value for the given block_state.
+        Returns the alpha (transparency) value for the given block_state.
         """
-        index = np.where(self._block_states == block_state)[0]
-        if len(index) == 0:
-            raise ValueError(f"Block state {block_state} not found in colormap.")
-        return self._alphas[index[0]]
-
-    @property
-    def block_states(self) -> np.ndarray:
-        return self._block_states
+        return self.get_rgba(block_state)[3]
     
-    @property
-    def colors(self) -> np.ndarray:
-        return self._colors
-    
-    @property
-    def alphas(self) -> np.ndarray:
-        return self._alphas
-    
-def get_block_colormap(name: str | BlockColormap) -> BlockColormap:
+def get_block_colormap(name: str | os.PathLike | BlockColormap) -> BlockColormap:
     """
-    Returns a BlockColormap object for one of the provided colormaps.
-    Loads the colormap from the package data on first request and caches it for future use.
+    Returns a BlockColormap object from a provided colormap or a custom CSV.
 
     Parameters
     ----------
-    name : str | BlockColormap
-        Name of the colormap. Options are 'standard', 'all', 'smooth' or a path to a custom 
+    name : str, os.PathLike, or BlockColormap
+        Name of the colormap: 'standard', 'all', 'smooth' or a path to a custom 
         colormap CSV file. If a BlockColormap object is provided, it is returned directly.
 
     Returns
@@ -97,8 +104,10 @@ def get_block_colormap(name: str | BlockColormap) -> BlockColormap:
     """
     if isinstance(name, BlockColormap):
         return name
-    if ".csv" in name:
+    if ".csv" in str(name):
         return BlockColormap(name)
     if name not in _INTERNAL_COLORMAPS:
-        _INTERNAL_COLORMAPS[name] = BlockColormap(files("mcschematic_plus").joinpath(f"data/block_colormaps/{name}.csv"))
-    return _INTERNAL_COLORMAPS[name]
+        raise ValueError(f"Colormap '{name}' not found. Available colormaps: {_INTERNAL_COLORMAPS}")
+    if name not in _loaded_internal_colormaps:
+        _loaded_internal_colormaps[name] = BlockColormap(files("mcschematic_plus").joinpath(f"data/block_colormaps/{name}.csv"))
+    return _loaded_internal_colormaps[name]

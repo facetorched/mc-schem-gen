@@ -1,67 +1,25 @@
 import numpy as np
 import pyvista as pv
 import tifffile
+from scipy.spatial import KDTree
 
-def to_mc_bool_volume(arr: np.ndarray, true_value=None) -> np.ndarray:
+def to_mc_volume(arr: np.ndarray) -> np.ndarray:
     """
-    Convert raw array in numpy/ImageJ format (z, y, x) = (Up, South, East) to boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
-    
-    Parameters
-    ----------
-    arr : ndarray
-        Input array in numpy/ImageJ format (z, y, x) or (z, y, x, c). Color channels are summed if present.
-    true_value : optional
-        The value to be considered as True in the boolean volume. If None, any non-zero value is True.
-
-    Returns
-    -------
-    result : ndarray
-        Boolean volume in Minecraft orientation (x, y, z) = (East, Up, South).
+    Convert raw array in numpy/ImageJ format (z, y, x) = (Up, South, East) to Minecraft coordinates (x, y, z) = (East, Up, South).
     """
-    if arr.ndim == 4:  # drop color channels
-        arr = arr.sum(axis=-1)
-    # rearrange axes to (x, z, y) to be compatible with Minecraft.
-    # The first axis is West->East, the second is Bottom->Top, and the last is North->South
-    arr = np.moveaxis(arr, 2, 0)
-    if true_value is not None:
-        return arr == true_value
-    return arr.astype(bool)
+    return np.moveaxis(arr, 2, 0)
 
-def read_tiff(path: str, true_value=None) -> np.ndarray:
+def read_tiff(path: str) -> np.ndarray:
     """
-    Read a multi-page TIFF file (z, y, x) = (Up, South, East) and return a boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
-
-    Parameters
-    ----------
-    path : str
-        Path to the TIFF file.
-    true_value : optional
-        The value to be considered as True in the boolean volume. If None, any non-zero value is True.
-    
-    Returns
-    -------
-    result : ndarray
-        3D binary mask translated to Minecraft coordinates where True indicates presence of structure.
+    Read a multi-page TIFF file (z, y, x) = (Up, South, East) and return a volume in Minecraft coordinates (x, y, z) = (East, Up, South).
     """
-    return to_mc_bool_volume(tifffile.imread(path), true_value=true_value)
+    return to_mc_volume(tifffile.imread(path))
 
-def read_npy(path: str, true_value=None) -> np.ndarray:
+def read_npy(path: str) -> np.ndarray:
     """
-    Read a NumPy .npy file (z, y, x) = (Up, South, East) and return a boolean volume in Minecraft coordinates (x, y, z) = (East, Up, South).
-
-    Parameters
-    ----------
-    path : str
-        Path to the .npy file.
-    true_value : optional
-        The value to be considered as True in the boolean volume. If None, any non-zero value is True.
-
-    Returns
-    -------
-    result : ndarray
-        3D binary mask translated to Minecraft coordinates where True indicates presence of structure.
+    Read a NumPy .npy or .npz file (z, y, x) = (Up, South, East) and return a volume in Minecraft coordinates (x, y, z) = (East, Up, South).
     """
-    return to_mc_bool_volume(np.load(path), true_value=true_value)
+    return to_mc_volume(np.load(path))
 
 def read_mesh(filename: str,
               spacing: float = 1.0,
@@ -72,8 +30,9 @@ def read_mesh(filename: str,
               fill: bool = True,
               flip_z: bool = True,
               edge_mode: str = "center",
-              method: str = "mesh_to_sdf"
-              ) -> tuple[np.ndarray, np.ndarray]:
+              method: str = "implicit_distance",
+              compute_scalars: bool = True,
+              ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """
     Load a mesh (x, y, z) = (East, North, Up) and convert to a boolean voxel volume in Minecraft coordinates (x, y, z) = (East, Up, South).
 
@@ -100,16 +59,21 @@ def read_mesh(filename: str,
         'inner' selects voxels whose centers are inside or touching the surface from inside,
         'outer' selects voxels whose centers are outside or touching the surface from outside.
     method : {'mesh_to_sdf', 'implicit_distance'}, optional
-        Method to compute signed distance field. 'mesh_to_sdf' is more robust for complex meshes. 'implicit_distance' uses PyVista's built-in method.
+        Method to compute signed distance field. 'mesh_to_sdf' is more robust for complex meshes. 
+        'implicit_distance' uses PyVista's built-in method. Default is "implicit_distance".
+    compute_scalars : bool, optional
+        If True, compute the nearest mesh scalar value at each voxel. For example, RGB colors. Default is True.
     
     Returns
     -------
-    voxel_volume : (x, y, z) ndarray
+    voxel_mask : (x, y, z) ndarray
         3D boolean mask indicating voxel occupancy in Minecraft coordinates.
     position : (3,) ndarray
         Position of the voxel grid origin (zero index) in Minecraft coordinates relative to `origin`.
+    scalars : (x, y, z, N) ndarray or None
+        Scalar value at each voxel, if `compute_scalars` is True. Otherwise, None.
     """
-    vol, position = voxelize_mesh(
+    vol, position, scalars = voxelize_mesh(
         filename,
         spacing=spacing,
         minimum=minimum,
@@ -120,10 +84,12 @@ def read_mesh(filename: str,
         flip_y=flip_z,
         edge_mode=edge_mode,
         method=method,
+        compute_scalars=compute_scalars,
     )
-    voxel_volume = to_mc_bool_volume(vol)
+    voxel_mask = to_mc_volume(vol)
     position = position[[2, 0, 1]]  # (Up, South, East) to (East, Up, South)
-    return voxel_volume, position
+    scalars = to_mc_volume(scalars) if scalars is not None else None
+    return voxel_mask, position, scalars
 
 def voxelize_mesh(mesh: pv.PolyData | str,
                    spacing: float | tuple = 1.0,
@@ -134,8 +100,9 @@ def voxelize_mesh(mesh: pv.PolyData | str,
                    fill: bool = True,
                    flip_y: bool = True,
                    edge_mode: str = "center",
-                   method: str = "mesh_to_sdf"
-                   ) -> tuple[np.ndarray, np.ndarray]:
+                   method: str = "implicit_distance",
+                   compute_scalars: bool = True,
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """
     Load a mesh (x, y, z) = (East, North, Up) and convert to a boolean voxel volume (z, y, x) = (Up, South, East).
     
@@ -163,19 +130,23 @@ def voxelize_mesh(mesh: pv.PolyData | str,
         'outer' selects voxels whose centers are outside or touching the surface from outside.
     method : {'mesh_to_sdf', 'implicit_distance'}, optional
         Method to compute signed distance field. 'mesh_to_sdf' is more robust for complex meshes. 
-        'implicit_distance' uses PyVista's built-in method (often faster).
-    
+        'implicit_distance' uses PyVista's built-in method. Default is "implicit_distance".
+    compute_scalars : bool, optional
+        If True, compute the nearest mesh scalar value at each voxel. For example, RGB colors. Default is True.
+
     Returns
     -------
-    voxel_volume : (z, y, x) ndarray
+    voxel_mask : (z, y, x) ndarray
         3D boolean mask indicating voxel occupancy.
     position : (3,) ndarray
         Position of the voxel grid origin (zero index) in voxel coordinates relative to `origin`.
+    scalars : (z, y, x, N) ndarray or None
+        Scalar value at each voxel, if `compute_scalars` is True. Otherwise, None.
     """
     # Ensure triangular mesh TODO: is this necessary?
     mesh = pv.read(mesh) if isinstance(mesh, str) else mesh
     if isinstance(mesh, pv.MultiBlock):
-        mesh = mesh.extract_geometry()
+        mesh = mesh.extract_surface(algorithm=None)
     elif not isinstance(mesh, pv.PolyData):
         mesh = pv.PolyData(mesh) # last resort
     mesh = mesh.triangulate()
@@ -231,6 +202,15 @@ def voxelize_mesh(mesh: pv.PolyData | str,
     if fill:
         inside = sdf < 0.0
         mask = inside | mask
+    scalars = None
+    if compute_scalars:
+        if mesh.active_scalars is None:
+            raise ValueError("Mesh must have active scalars to use compute_scalars=True.")
+        # get nearest point on the mesh for each voxel and get its scalar values
+        mask_grid_points = grid.points[mask.flatten()]
+        _, idx = KDTree(mesh.points).query(mask_grid_points)
+        scalars = np.zeros(mask.shape + mesh.active_scalars.shape[1:], dtype=mesh.active_scalars.dtype)
+        scalars[mask] = mesh.active_scalars[idx]
     position = np.zeros(3, dtype=int)
     if origin is not None:
         vox_min = np.ceil(min_mesh / spacing).astype(int)
@@ -240,6 +220,8 @@ def voxelize_mesh(mesh: pv.PolyData | str,
     if flip_y:
         mask = mask[:, ::-1, :]
         position[1] = - ((mask.shape[1] - 1) + position[1])
-    voxel_volume = mask.astype(bool)
+        if scalars is not None:
+            scalars = scalars[:, ::-1, :]
+    voxel_mask = mask.astype(bool)
 
-    return voxel_volume, position
+    return voxel_mask, position, scalars

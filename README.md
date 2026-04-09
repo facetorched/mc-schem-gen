@@ -14,14 +14,25 @@ pip install -e .
 The class `MCSchematicPlus` offers the main functionality of the package and is a drop-in replacement for `MCSchematic`.
 
 ```python
-from mcschematic_plus import MCSchematicPlus
+from mcschematic_plus import MCSchematicPlus, read_tiff, read_mesh
 
-vs = MCSchematicPlus()
-# Load and add a layer from a TIFF image
-vs.add_layer(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
-# Load and add a layer from an existing schematic file
-vs.add_schem("tests/data/min_cell.schematic")
-# Save both a schematic and structure files
+schem = MCSchematicPlus()
+
+# Load 3D data from a multipage tiff
+schem.placeVolume(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
+
+# Load blocks from an existing schematic file
+schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schematic"), placePosition=(0,0,0))
+
+# Load a 3D model
+voxels, position, scalars = read_mesh("tests/data/glycine.glb", spacing=0.1, edge_mode="inner", compute_scalars=True)
+colors = (scalars * 255).astype(int)
+schem.placeVolume(voxels, colors, blockColormap="standard", placePosition=position)
+
+# Visualize the schematic
+schem.show()
+
+# Save both a schematic and nbt file
 vs.save_schem("output/example.schem")
 vs.save_nbt("output/example", "structure")
 

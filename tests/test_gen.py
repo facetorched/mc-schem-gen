@@ -19,7 +19,7 @@ def test_large_volume():
     vol[10:90, 10:90, 10:90] = True
     schem = MCSchematicPlus()
     schem.placeVolume(vol, "minecraft:dirt")
-    schem.saveNBT(f"{OUTPUT_DIR}/large.nbt", max_size=48)
+    schem.saveNBT(f"{OUTPUT_DIR}/large.nbt", maxSize=48)
     schem.save(f"{OUTPUT_DIR}/large.schem")
     # try to load the nbt
     load(f"{OUTPUT_DIR}/large_0_0_0.nbt")
@@ -50,18 +50,26 @@ def test_split():
         block_vs.save(f"{OUTPUT_DIR}/split_{block_name}.schem")
 
 def test_mesh():
-    vol, pos = read_mesh("tests/data/letter_F.vtk", spacing=0.1, minimum=(-2.0, -2.0, 0), origin=None)
+    vol, pos, _ = read_mesh("tests/data/letter_F.vtk", spacing=0.1, minimum=(-2.0, -2.0, 0), origin=None)
     assert np.array_equal(pos, np.array([0, 0, -40]))
     schem = MCSchematicPlus()
     schem.placeVolume(vol, "minecraft:blue_stained_glass")
     schem.saveNBT(f"{OUTPUT_DIR}/mesh_f.nbt")
     schem.save(f"{OUTPUT_DIR}/mesh_f.schem")
-    vol2, pos2 = read_mesh("tests/data/letter_F.vtk", spacing=0.1, minimum=(-2.0, -2.0, 0), origin=(0, 0, 0))
+    vol2, pos2, _ = read_mesh("tests/data/letter_F.vtk", spacing=0.1, minimum=(-2.0, -2.0, 0), origin=(0, 0, 0))
     assert np.array_equal(pos2, np.array([-20, 0, -20]))
     schem2 = MCSchematicPlus()
     schem2.placeVolume(vol2, "minecraft:blue_stained_glass", placePosition=pos2)
     schem2.saveNBT(f"{OUTPUT_DIR}/mesh_f_origin.nbt")
     schem2.save(f"{OUTPUT_DIR}/mesh_f_origin.schem")
+
+def test_mesh_color():
+    voxels, position, scalars = read_mesh("tests/data/glycine.glb", spacing=0.1, edge_mode="inner", compute_scalars=True)
+    colors = (scalars * 255).astype(int)
+    schem = MCSchematicPlus()
+    schem.placeVolume(voxels, colors, blockColormap="standard", placePosition=position)
+    schem.saveNBT(f"{OUTPUT_DIR}/mesh_glycine.nbt")
+    schem.save(f"{OUTPUT_DIR}/mesh_glycine.schem")
 
 def replace_test():
     vol = np.zeros((10, 10, 10), dtype=bool)
@@ -96,6 +104,7 @@ if __name__ == "__main__":
     test_tiff()
     test_split()
     test_mesh()
+    test_mesh_color()
     replace_test()
     test_schem()
     test_mcedit_schem()

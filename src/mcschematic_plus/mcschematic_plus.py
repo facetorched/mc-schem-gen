@@ -1,19 +1,19 @@
 import numpy as np
 import os
+import pyvista as pv
 from typing import BinaryIO, Sequence
 from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
 from .block_colormap import BlockColormap, get_block_colormap
-from pyvista import ImageData, UnstructuredGrid, Plotter
 
 class MCSchematicPlus(MCSchematic):
-    def __init__(self, schematicToLoadPath_or_mcStructure: str | MCStructure = None, version: 'Version' = None):
-        if isinstance(schematicToLoadPath_or_mcStructure, str):
-            schematicToLoadPath = schematicToLoadPath_or_mcStructure
+    def __init__(self, schematicToLoadPath_or_mcStructure: str | os.PathLike | MCStructure = None, version: 'Version' = None):
+        if isinstance(schematicToLoadPath_or_mcStructure, (str, os.PathLike)):
+            schematicToLoadPath = str(schematicToLoadPath_or_mcStructure)
             if not os.path.isfile(schematicToLoadPath):
                 raise FileNotFoundError(f"Schematic file not found: {schematicToLoadPath}")
-            if schematicToLoadPath.endswith(".schem"):
+            if schematicToLoadPath.lower().endswith(".schem"):
                 self._initFromFile(schematicToLoadPath)
             else:
                 try:
@@ -35,17 +35,22 @@ class MCSchematicPlus(MCSchematic):
         else:
             super().__init__(schematicToLoadPath_or_mcStructure)
 
-    def placeVolume(self, volume: np.ndarray, blockData: str | None, colors: np.ndarray | None = None, placePosition: tuple[int, int, int] = (0, 0, 0)):
-        """Add blocks for every True voxel in volume. The volume shape is Minecraft (x,y,z)."""
-        volume = np.asarray(volume, dtype=bool)
-        positions = np.argwhere(volume)  # shape (N, 3) with columns [x, y, z]
+    def placeVolume(self, volumeMask: np.ndarray, blockData_or_color: str | np.ndarray | None, blockColormap: str | BlockColormap | None = None, placePosition: tuple[int, int, int] = (0, 0, 0)):
+        """Add blocks for every True voxel in volume_mask. The volume axes should be (x, y, z) = (East, Up, South)."""
+        volumeMask = np.asarray(volumeMask, dtype=bool)
+        positions = np.argwhere(volumeMask)  # shape (N, 3) with columns [x, y, z]
         if positions.size == 0:
             return
         positions += np.array(placePosition)  # offset coordinates
-        _colors = colors[volume] if colors is not None else None
-        self.setBlocks(positions, blockData)
+        if blockData_or_color is not None:
+            _bdoc_arr = np.asarray(blockData_or_color)
+            if _bdoc_arr.ndim >= 3:
+                if _bdoc_arr.shape[:3] != volumeMask.shape:
+                    raise ValueError("If blockData_or_color is an array, its first 3 dimensions must match the volume_mask shape")
+                blockData_or_color = _bdoc_arr[volumeMask]  # filter to only True voxels
+        self.setBlocks(positions, blockData_or_color, blockColormap)
     
-    def setBlocks(self, positions: np.ndarray, blockData: str | Sequence[str] | None):
+    def setBlocks(self, positions: np.ndarray, blockData_or_color: str | Sequence[str] | np.ndarray | None, blockColormap: str | BlockColormap | None = None):
         """Add blocks for every (x,y,z) in points."""
         positions = np.asarray(positions)
         if positions.size == 0:
@@ -53,7 +58,7 @@ class MCSchematicPlus(MCSchematic):
         positions = np.asarray(positions)
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError("positions must be an array of shape (N, 3)")
-        if blockData is None:
+        if blockData_or_color is None:
             for x, y, z in positions:
                 pos = (int(x), int(y), int(z))
                 if pos in self._structure._blockStates:
@@ -61,12 +66,20 @@ class MCSchematicPlus(MCSchematic):
                 if pos in self._structure._blockEntities:
                     del self._structure._blockEntities[pos]
             return
+        if blockColormap is not None:
+            cmap = get_block_colormap(blockColormap)
+            blockData = cmap.get_block_state(blockData_or_color)
+        else:
+            if isinstance(blockData_or_color, str) or isinstance(blockData_or_color[0], str): # single block or list of blocks
+                blockData = blockData_or_color
+            else:
+                raise ValueError("If blockColormap is not provided, blockData_or_color must be a blockData string or a sequence of blockData strings.")
         if isinstance(blockData, str):
             for x, y, z in positions:
                 self.setBlock((int(x), int(y), int(z)), blockData) # TODO slightly inefficient but simple
         else:
             for (x, y, z), bd in zip(positions, blockData):
-                self.setBlock((int(x), int(y), int(z)), bd)
+                self.setBlock((int(x), int(y), int(z)), str(bd))
 
     def getBlocks(self):
         """Return a dictionary of positions to block names."""
@@ -122,7 +135,7 @@ class MCSchematicPlus(MCSchematic):
         """Get the latest supported Minecraft version."""
         return max(Version, key=lambda v: v.value)
 
-    def save(self, filepath: str | BinaryIO, version: 'Version' = None, fastSaving: bool = False):
+    def save(self, filepath: str | os.PathLike | BinaryIO, version: 'Version' = None, fastSaving: bool = False):
         """Save the structure as a Sponge schematic file at `filepath`."""
         # if filepath is a string, ensure directory exists
         if isinstance(filepath, (str, os.PathLike)):
@@ -205,49 +218,46 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str, version : 'Version' = None, max_size: int | tuple[int, int, int] | None = None, filename_mode: str = "auto"):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto"):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
-        If the structure exceeds max_size in any dimension, it will be split into multiple files.
+        If the structure exceeds maxSize in any dimension, it will be split into multiple files.
 
         Parameters
         ----------
-        filepath : str
+        filepath : str or os.PathLike
             Directory to save the .nbt files. If multiple files are created, they will be named
             <filepath>_x_y_z.nbt where x,y,z are the tile indices.
         version : 'Version', optional
             The Version to include in the NBT file. If None, the latest version will be used.
-        max_size : int | tuple | None, optional
+        maxSize : int | tuple | None, optional
             Maximum size in each dimension for a single .nbt file. If None, a single file will be created. Default is None.
-        filename_mode : str, optional
+        filenameMode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
         """
-        # ensure directory exists
         directory = os.path.dirname(filepath)
-        base_name = os.path.basename(filepath)
-        if base_name.lower().endswith('.nbt'):
-            base_name = base_name[:-4]
-        if directory and not os.path.exists(directory):
+        base_name = os.path.splitext(os.path.basename(filepath))[0]
+        if not os.path.exists(directory):
             os.makedirs(directory)
         if version is None:
             version = self.getLatestVersion()
         x_min, y_min, z_min = self._structure.getBounds()[0]
         x_max, y_max, z_max = self._structure.getBounds()[1]
         size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
-        if max_size is None:
-            max_size = (size_x, size_y, size_z)
-        elif isinstance(max_size, int):
-            max_size = (max_size, max_size, max_size)
-        nx = (size_x + max_size[0] - 1) // max_size[0]
-        ny = (size_y + max_size[1] - 1) // max_size[1]
-        nz = (size_z + max_size[2] - 1) // max_size[2]
+        if maxSize is None:
+            maxSize = (size_x, size_y, size_z)
+        elif isinstance(maxSize, int):
+            maxSize = (maxSize, maxSize, maxSize)
+        nx = (size_x + maxSize[0] - 1) // maxSize[0]
+        ny = (size_y + maxSize[1] - 1) // maxSize[1]
+        nz = (size_z + maxSize[2] - 1) // maxSize[2]
 
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
-                    x0, y0, z0 = ix*max_size[0] + x_min, iy*max_size[1] + y_min, iz*max_size[2] + z_min
-                    x1, y1, z1 = min(x0+max_size[0], x_max), min(y0+max_size[1], y_max), min(z0+max_size[2], z_max)
+                    x0, y0, z0 = ix*maxSize[0] + x_min, iy*maxSize[1] + y_min, iz*maxSize[2] + z_min
+                    x1, y1, z1 = min(x0+maxSize[0], x_max), min(y0+maxSize[1], y_max), min(z0+maxSize[2], z_max)
                     tile_size = (x1-x0, y1-y0, z1-z0)
 
                     root = Compound()
@@ -302,9 +312,9 @@ class MCSchematicPlus(MCSchematic):
                     root["entities"] = List[Compound]() # TODO: Add support for entities
 
                     # Save
-                    if nx>1 or ny>1 or nz>1 or filename_mode == "indexed":
+                    if nx>1 or ny>1 or nz>1 or filenameMode == "indexed":
                         fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
-                    elif filename_mode == "auto":
+                    elif filenameMode == "auto":
                         fname = f"{base_name}.nbt"
                     path = os.path.join(directory, fname)
                     
@@ -312,14 +322,15 @@ class MCSchematicPlus(MCSchematic):
                     nbt_file.save(path)
                     print(f"Saved {path} ({tile_size})")
 
-    def toMesh(self, block_colormap: str | BlockColormap | None = "all"):
+    def toMesh(self, blockColormap: str | BlockColormap | None = "all") -> pv.UnstructuredGrid:
         """
         Convert to a pyvista UnstructuredGrid mesh for visualization.
 
         Parameters
         ----------
-        block_colormap : str | BlockColormap | None, optional
-            Colormap to use for coloring blocks. If None, all blocks will be gray. Default is "all".
+        blockColormap : str, BlockColormap, or None, optional
+            Colormap to use for converting block states to colors. Valid strings are 'standard', 'all', 'smooth' 
+            or a path to a custom colormap CSV file. Default is "all".
         
         Returns
         -------
@@ -328,41 +339,37 @@ class MCSchematicPlus(MCSchematic):
         bounds = np.array(self.getStructure().getBounds())
         shape = bounds[1] - bounds[0] + 1 # +1 because bounds are inclusive
         blocks = self.getBlocks()
-        cmap = get_block_colormap(block_colormap) if block_colormap is not None else None
+        cmap = get_block_colormap(blockColormap) if blockColormap is not None else None
         mask_3d = np.zeros(shape, dtype=bool)
-        colors_3d = np.zeros(tuple(shape) + (3,), dtype=np.uint8)
-        alphas_3d = np.zeros(shape, dtype=np.uint8)
+        if cmap is not None:
+            rgba_3d = np.zeros(tuple(shape) + (4,), dtype=np.uint8)
         for pos, block in blocks.items():
             if block == "minecraft:air":
                 continue
             pos = tuple(np.array(pos) - bounds[0])
             mask_3d[pos] = True
-            if cmap is None: # if no colormap, use opaque gray for all blocks
-                colors_3d[pos] = (128, 128, 128)
-                alphas_3d[pos] = 255
-            else:
-                colors_3d[pos] = cmap.get_color(block)
-                alphas_3d[pos] = cmap.get_alpha(block)
+            if cmap is not None:
+                rgba_3d[pos] = cmap.get_rgba(block)
 
-        grid = ImageData(dimensions=np.array(shape)+1, spacing=(1, 1, 1))
-        rgba_3d = np.zeros(tuple(shape) + (4,), dtype=np.uint8)
-        rgba_3d[..., :3] = colors_3d
-        rgba_3d[..., 3] = alphas_3d
+        grid = pv.ImageData(dimensions=np.array(shape)+1, spacing=(1, 1, 1))
 
         grid.cell_data["mask"] = mask_3d.flatten(order='F')
-        grid.cell_data["colors"] = rgba_3d.reshape(-1, 4, order='F')
-        mesh: UnstructuredGrid = grid.threshold(0.5, scalars="mask", invert=False)
+        if cmap is not None:
+            grid.cell_data["colors"] = rgba_3d.reshape(-1, 4, order='F')
+        mesh: pv.UnstructuredGrid = grid.threshold(0.5, scalars="mask", invert=False)
+        mesh.cell_data.pop("mask")
         mesh.translate(bounds[0], inplace=True) # translate back to world coordinates
         return mesh
     
-    def show(self, block_colormap: str | BlockColormap | None = "all", plotter: Plotter | None = None, **kwargs):
+    def show(self, blockColormap: str | BlockColormap | None = "all", plotter: pv.Plotter | None = None, **kwargs):
         """
         Visualize using pyvista.
 
         Parameters
         ----------
-        block_colormap : str | BlockColormap | None, optional
-            Colormap to use for coloring blocks. If None, all blocks will be gray. Default is "all".
+        blockColormap : str, BlockColormap, or None, optional
+            Colormap to use for converting block states to colors. Valid strings are 'standard', 'all', 'smooth' 
+            or a path to a custom colormap CSV file. Default is "all".
         plotter : pyvista.Plotter, optional
             An existing pyvista Plotter to use for visualization. If None, a new Plotter will be created. Default is None.
         **kwargs
@@ -373,9 +380,12 @@ class MCSchematicPlus(MCSchematic):
         pyvista.Plotter
             The Plotter used for visualization.
         """
-        mesh = self.toMesh(block_colormap)
-        p = plotter if plotter is not None else Plotter()
-        p.add_mesh(mesh, scalars="colors", rgb=True)
+        mesh = self.toMesh(blockColormap=blockColormap)
+        p = plotter if plotter is not None else pv.Plotter()
+        if blockColormap is None:
+            p.add_mesh(mesh)
+        else:
+            p.add_mesh(mesh, scalars="colors", rgb=True)
         p.camera_position = 'xy'
         p.camera.elevation = 45
         p.show_axes()
