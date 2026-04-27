@@ -6,6 +6,7 @@ from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
 from .block_colormap import BlockColormap, get_block_colormap
+import warnings
 
 class MCSchematicPlus(MCSchematic):
     def __init__(self, schematicToLoadPath_or_mcStructure: str | os.PathLike | MCStructure = None, version: 'Version' = None):
@@ -327,7 +328,6 @@ class MCSchematicPlus(MCSchematic):
                     
                     nbt_file = File(root, gzipped=True, root_name="Schematic")
                     nbt_file.save(path)
-                    print(f"Saved {path} ({tile_size})")
 
     def toMesh(self, blockColormap: str | BlockColormap | None = "all") -> pv.UnstructuredGrid:
         """
@@ -350,13 +350,19 @@ class MCSchematicPlus(MCSchematic):
         mask_3d = np.zeros(shape, dtype=bool)
         if cmap is not None:
             rgba_3d = np.zeros(tuple(shape) + (4,), dtype=np.uint8)
+        missing_blocks = set()
         for pos, block in blocks.items():
             if block == "minecraft:air":
                 continue
             pos = tuple(np.array(pos) - bounds[0])
             mask_3d[pos] = True
             if cmap is not None:
-                rgba_3d[pos] = cmap.get_rgba(block)
+                try:
+                    rgba_3d[pos] = cmap.get_rgba(block)
+                except KeyError:
+                    missing_blocks.add(block)
+        if missing_blocks:
+            warnings.warn(f"Skipping blocks not found in colormap: {missing_blocks}")
 
         grid = pv.ImageData(dimensions=np.array(shape)+1, spacing=(1, 1, 1))
 

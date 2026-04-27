@@ -69,21 +69,21 @@ class BlockColormap:
     
     def get_rgba(self, block_state: str) -> np.ndarray:
         """
-        Returns the (R, G, B, A) color for the given block_state.
+        Returns the (R, G, B, A) color for the given block_state. Raises KeyError if block_state is not found in the colormap.
         """
         if block_state not in self._dict:
-            raise ValueError(f"Block state {block_state} not found in colormap.")
+            raise KeyError(f"Block state {block_state} not found in colormap.")
         return np.array(self._dict[block_state])
     
     def get_rgb(self, block_state: str) -> np.ndarray:
         """
-        Returns the (R, G, B) color for the given block_state.
+        Returns the (R, G, B) color for the given block_state. Raises KeyError if block_state is not found in the colormap.
         """
         return self.get_rgba(block_state)[:3]
     
     def get_alpha(self, block_state: str) -> int:
         """
-        Returns the alpha (transparency) value for the given block_state.
+        Returns the alpha (transparency) value for the given block_state. Raises KeyError if block_state is not found in the colormap.
         """
         return self.get_rgba(block_state)[3]
     
@@ -104,10 +104,9 @@ def get_block_colormap(name: str | os.PathLike | BlockColormap) -> BlockColormap
     """
     if isinstance(name, BlockColormap):
         return name
-    if ".csv" in str(name):
+    if name in _INTERNAL_COLORMAPS:
+        if name not in _loaded_internal_colormaps:
+            _loaded_internal_colormaps[name] = BlockColormap(files("mcschematic_plus").joinpath(f"data/block_colormaps/{name}.csv"))
+        return _loaded_internal_colormaps[name]
+    else:
         return BlockColormap(name)
-    if name not in _INTERNAL_COLORMAPS:
-        raise ValueError(f"Colormap '{name}' not found. Available colormaps: {_INTERNAL_COLORMAPS}")
-    if name not in _loaded_internal_colormaps:
-        _loaded_internal_colormaps[name] = BlockColormap(files("mcschematic_plus").joinpath(f"data/block_colormaps/{name}.csv"))
-    return _loaded_internal_colormaps[name]
