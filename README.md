@@ -22,7 +22,7 @@ schem = MCSchematicPlus()
 schem.placeVolume(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
 
 # Load blocks from an existing schematic file
-schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schematic"), placePosition=(0,0,0))
+schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schematic"))
 
 # Load a 3D model
 voxels, position, scalars = read_mesh("tests/data/glycine.glb", spacing=0.1, edge_mode="inner", compute_scalars=True)

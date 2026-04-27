@@ -35,6 +35,13 @@ class MCSchematicPlus(MCSchematic):
         else:
             super().__init__(schematicToLoadPath_or_mcStructure)
 
+    # override methods to make placePosition optional, while maintaining backwards compatibility.
+    def placeSchematic(self, incomingSchematic, placePosition=(0, 0, 0)):
+        return super().placeSchematic(incomingSchematic, placePosition)
+    
+    def placeStructure(self, incomingStructure, placePosition=(0, 0, 0)):
+        return super().placeStructure(incomingStructure, placePosition)
+
     def placeVolume(self, volumeMask: np.ndarray, blockData_or_color: str | np.ndarray | None, blockColormap: str | BlockColormap | None = None, placePosition: tuple[int, int, int] = (0, 0, 0)):
         """Add blocks for every True voxel in volume_mask. The volume axes should be (x, y, z) = (East, Up, South)."""
         volumeMask = np.asarray(volumeMask, dtype=bool)
@@ -361,7 +368,7 @@ class MCSchematicPlus(MCSchematic):
         mesh.translate(bounds[0], inplace=True) # translate back to world coordinates
         return mesh
     
-    def show(self, blockColormap: str | BlockColormap | None = "all", plotter: pv.Plotter | None = None, **kwargs):
+    def show(self, blockColormap: str | BlockColormap | None = "all", plotter: pv.Plotter | None = None, display: bool = True, **kwargs):
         """
         Visualize using pyvista.
 
@@ -372,13 +379,14 @@ class MCSchematicPlus(MCSchematic):
             or a path to a custom colormap CSV file. Default is "all".
         plotter : pyvista.Plotter, optional
             An existing pyvista Plotter to use for visualization. If None, a new Plotter will be created. Default is None.
+        display : bool, optional
+            Whether to call plotter.show(). Default is True.
         **kwargs
             Additional keyword arguments to pass to pyvista.Plotter.show()
         
         Returns
         -------
         pyvista.Plotter
-            The Plotter used for visualization.
         """
         mesh = self.toMesh(blockColormap=blockColormap)
         p = plotter if plotter is not None else pv.Plotter()
@@ -386,8 +394,10 @@ class MCSchematicPlus(MCSchematic):
             p.add_mesh(mesh)
         else:
             p.add_mesh(mesh, scalars="colors", rgb=True)
+            p.enable_depth_peeling() # Rendering transparency correctly
         p.camera_position = 'xy'
         p.camera.elevation = 45
         p.show_axes()
-        p.show(**kwargs)
+        if display:
+             p.show(**kwargs)
         return p

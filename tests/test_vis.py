@@ -12,7 +12,7 @@ def test_show_color():
     p = pv.Plotter()
     p.add_mesh(pv.Sphere(radius=0.5), color="red", name="origin_marker")
     schem = MCSchematicPlus()
-    schem.placeSchematic(MCSchematicPlus("tests/data/mesh_glycine.schem"), placePosition=(0, 0, 0))
+    schem.placeSchematic(MCSchematicPlus("tests/data/mesh_glycine.schem"))
     schem.show(plotter=p)
 
 if __name__ == "__main__":
