@@ -21,6 +21,11 @@ schem = MCSchematicPlus()
 # Load 3D data from a multipage tiff
 schem.placeVolume(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
 
+# Load 2D RGB image
+image = read_image("tests/data/qcb.png")
+mask = image.sum(axis=-1).astype(bool)
+schem.placeVolume(mask, image, blockColormap="standard")
+
 # Load blocks from an existing schematic file
 schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schematic"))
 

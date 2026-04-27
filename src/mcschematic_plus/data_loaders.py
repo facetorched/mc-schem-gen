@@ -2,6 +2,7 @@ import numpy as np
 import pyvista as pv
 import tifffile
 from scipy.spatial import KDTree
+from PIL import Image
 
 def to_mc_volume(arr: np.ndarray) -> np.ndarray:
     """
@@ -20,6 +21,14 @@ def read_npy(path: str) -> np.ndarray:
     Read a NumPy .npy or .npz file (z, y, x) = (Up, South, East) and return a volume in Minecraft coordinates (x, y, z) = (East, Up, South).
     """
     return to_mc_volume(np.load(path))
+
+def read_image(path: str) -> np.ndarray:
+    """
+    Read a 2D image file (y, x) = (South, East) and return a volume in Minecraft coordinates (x, y, z) = (East, Up, South) with a single layer of voxels.
+    """
+    img = Image.open(path)
+    # add z axis with size 1 and convert to numpy array
+    return to_mc_volume(np.array(img)[None, ...])
 
 def read_mesh(filename: str,
               spacing: float = 1.0,

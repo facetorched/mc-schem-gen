@@ -7,6 +7,7 @@ from .data_loaders import (
     to_mc_volume,
     read_tiff,
     read_npy,
+    read_image,
     read_mesh,
     voxelize_mesh,
 )
