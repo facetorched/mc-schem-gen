@@ -13,8 +13,6 @@ schem.placeSchematic(MCSchematicPlus("joshua_work/cell_input/martini2_cell.schem
 
 # # Load a 3D model
 
-
-
 # Visualize the schematic (commented out as it fails on empty meshes)
 # schem.show()
 
@@ -26,5 +24,5 @@ schem.placeSchematic(MCSchematicPlus("joshua_work/cell_input/martini2_cell.schem
 split = schem.splitByBlock()
 for block_namespaced_name, block_vs in split.items():
     block_name = block_namespaced_name.replace(":", "_")
-    block_vs.saveNBT(f"joshua_work/output/martini2/{block_name}/v.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48))
+    block_vs.saveNBT(f"joshua_work/output/martini3/{block_name}/v.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48))
     # block_vs.save_schem(f"joshua_work/output/martini2/split_{block_name}.schem")

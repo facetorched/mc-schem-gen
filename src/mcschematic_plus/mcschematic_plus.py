@@ -218,7 +218,7 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto"):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", removeAir = False, shifted=True):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds maxSize in any dimension, it will be split into multiple files.
@@ -242,6 +242,7 @@ class MCSchematicPlus(MCSchematic):
             os.makedirs(directory)
         if version is None:
             version = self.getLatestVersion()
+        
         x_min, y_min, z_min = self._structure.getBounds()[0]
         x_max, y_max, z_max = self._structure.getBounds()[1]
         size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
@@ -253,6 +254,17 @@ class MCSchematicPlus(MCSchematic):
         ny = (size_y + maxSize[1] - 1) // maxSize[1]
         nz = (size_z + maxSize[2] - 1) // maxSize[2]
 
+        if not shifted:
+            # If shifted, we want the coordinates in the NBT files to be relative to the minimum bound (i.e. start at 0,0,0)
+            # This is usually what you want when working with schematics, but can cause issues if you want to preserve world coordinates
+            # In that case, set shifted=False to have the coordinates in the NBT files match the world coordinates
+            min_rel = (x_min, y_min, z_min)
+            x_min, y_min, z_min = 0, 0, 0
+            x_max, y_max, z_max = size_x, size_y, size_z
+            nx = (x_max + maxSize[0] - 1) // maxSize[0]
+            ny = (y_max + maxSize[1] - 1) // maxSize[1]
+            nz = (z_max + maxSize[2] - 1) // maxSize[2]
+            
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
@@ -275,8 +287,15 @@ class MCSchematicPlus(MCSchematic):
                     # Blocks
                     blocks = List[Compound]()
                     
+                    # Reminder that if this is not shifted, then (x,y,z) needs to be shifted too
                     for (x,y,z), block in self.getBlocks().items():
-                        if x0 <= x < x1 and y0 <= y < y1 and z0 <= z < z1:
+                        rx, ry, rz = x, y, z # relative coordinates after shifting
+                        if not shifted:
+                            rx -= min_rel[0]
+                            ry -= min_rel[1]
+                            rz -= min_rel[2]
+
+                        if x0 <= rx < x1 and y0 <= ry < y1 and z0 <= rz < z1:
                             rel = (x-x0, y-y0, z-z0)
                             
                             if block not in palette_index:
@@ -299,6 +318,7 @@ class MCSchematicPlus(MCSchematic):
                             btag["state"] = Int(state)
                             btag["pos"] = List[Int]([Int(rel[0]), Int(rel[1]), Int(rel[2])])
                             
+                            # Block entities will be messed up if shifted is false
                             if (x,y,z) in self._structure._blockEntities:
                                 blockEntityString = self._structure._blockEntities[(x,y,z)]
                                 if "{" in blockEntityString:
@@ -308,6 +328,17 @@ class MCSchematicPlus(MCSchematic):
                             blocks.append(btag)
 
                     root["palette"] = palette
+
+                    # Added by Joshua
+                    if removeAir:
+                        if nx>1 or ny>1 or nz>1 or filenameMode == "indexed":
+                            fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
+                        else:
+                            fname = f"{base_name}.nbt"
+                        print(f"Skipped saving {fname} because it contains only air blocks.")
+                        return
+                        
+
                     root["blocks"] = blocks
                     root["entities"] = List[Compound]() # TODO: Add support for entities
 
