@@ -1,5 +1,3 @@
-from turtle import position
-
 from mcschematic_plus import MCSchematicPlus, read_tiff, read_mesh, read_npy
 from mcschematic import Version
 
@@ -20,3 +18,6 @@ schem.saveNBT(f"{OUTPUT_PATH}/{CELL_NAME}.nbt", Version.JE_1_20_1, maxSize=(48, 
 # for block_namespaced_name, block_vs in split.items():
 #     block_name = block_namespaced_name.replace("minecraft:", "")
 #     block_vs.saveNBT(f"{OUTPUT_PATH}/{block_name}/v.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48), removeAir=False, shifted=False)
+
+
+# Run: .venv/Scripts/python.exe joshua_work/gen_schem_splitter.py
