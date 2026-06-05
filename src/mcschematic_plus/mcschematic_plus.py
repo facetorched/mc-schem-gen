@@ -1,5 +1,6 @@
 import numpy as np
 import os
+from pathlib import Path
 import pyvista as pv
 from typing import BinaryIO, Sequence
 from mcschematic import MCSchematic, MCStructure, Version
@@ -218,7 +219,7 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", removeAir = False, shifted=True):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", removeAir = False, shifted=True, rewriteExisting=True):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds maxSize in any dimension, it will be split into multiple files.
@@ -235,6 +236,8 @@ class MCSchematicPlus(MCSchematic):
         filenameMode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
+        rewriteExisting : bool, optional
+            If True (default), existing files will be overwritten. If False, existing files will not be overwritten.
         """
         directory = os.path.dirname(filepath)
         base_name = os.path.splitext(os.path.basename(filepath))[0]
@@ -243,8 +246,22 @@ class MCSchematicPlus(MCSchematic):
         if version is None:
             version = self.getLatestVersion()
         
+
+
+
         x_min, y_min, z_min = self._structure.getBounds()[0]
         x_max, y_max, z_max = self._structure.getBounds()[1]
+        
+        if not shifted:
+            # If shifted, we want the coordinates in the NBT files to be relative to the minimum bound (i.e. start at 0,0,0)
+            # This is usually what you want when working with schematics, but can cause issues if you want to preserve world coordinates
+            # In that case, set shifted=False to have the coordinates in the NBT files match the world coordinates
+            min_rel = (x_min, y_min, z_min)
+            # AHHH We are just going to assume that the minimum bound is at or above 0,0,0.
+            if x_min < 0 or y_min < 0 or z_min < 0:
+                raise ValueError("Negative minimum bounds are not supported when shifted=False. Found minimum bound of ({x_min}, {y_min}, {z_min}). Consider adjusting the structure to have non-negative bounds. Or fix the code.")
+            x_min, y_min, z_min = 0, 0, 0
+
         size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
         if maxSize is None:
             maxSize = (size_x, size_y, size_z)
@@ -254,20 +271,21 @@ class MCSchematicPlus(MCSchematic):
         ny = (size_y + maxSize[1] - 1) // maxSize[1]
         nz = (size_z + maxSize[2] - 1) // maxSize[2]
 
-        if not shifted:
-            # If shifted, we want the coordinates in the NBT files to be relative to the minimum bound (i.e. start at 0,0,0)
-            # This is usually what you want when working with schematics, but can cause issues if you want to preserve world coordinates
-            # In that case, set shifted=False to have the coordinates in the NBT files match the world coordinates
-            min_rel = (x_min, y_min, z_min)
-            x_min, y_min, z_min = 0, 0, 0
-            x_max, y_max, z_max = size_x, size_y, size_z
-            nx = (x_max + maxSize[0] - 1) // maxSize[0]
-            ny = (y_max + maxSize[1] - 1) // maxSize[1]
-            nz = (z_max + maxSize[2] - 1) // maxSize[2]
+
+
+
             
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
+
+                    # Code to find if file exists already:
+                    if not rewriteExisting:
+                        if any(Path(directory).glob(f"*{ix}_{iy}_{iz}.nbt")):
+                            print(f"Skipping existing tile {ix}_{iy}_{iz}")
+                            continue
+
+
                     x0, y0, z0 = ix*maxSize[0] + x_min, iy*maxSize[1] + y_min, iz*maxSize[2] + z_min
                     x1, y1, z1 = min(x0+maxSize[0], x_max), min(y0+maxSize[1], y_max), min(z0+maxSize[2], z_max)
                     tile_size = (x1-x0, y1-y0, z1-z0)
