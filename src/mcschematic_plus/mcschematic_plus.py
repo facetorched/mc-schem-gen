@@ -1,5 +1,6 @@
 import numpy as np
 import os
+from collections import defaultdict
 from pathlib import Path
 import pyvista as pv
 from typing import BinaryIO, Sequence
@@ -219,7 +220,7 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", removeAir = False, shifted=True, rewriteExisting=True):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", removeAir = False, shifted=True, rewriteExisting=True, ):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds maxSize in any dimension, it will be split into multiple files.
@@ -236,6 +237,8 @@ class MCSchematicPlus(MCSchematic):
         filenameMode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
+        shifted : bool, optional
+            If true (default), will shift everything back when splitting by block. Should be false.
         rewriteExisting : bool, optional
             If True (default), existing files will be overwritten. If False, existing files will not be overwritten.
         """
@@ -246,8 +249,6 @@ class MCSchematicPlus(MCSchematic):
         if version is None:
             version = self.getLatestVersion()
         
-
-
 
         x_min, y_min, z_min = self._structure.getBounds()[0]
         x_max, y_max, z_max = self._structure.getBounds()[1]
@@ -271,10 +272,23 @@ class MCSchematicPlus(MCSchematic):
         ny = (size_y + maxSize[1] - 1) // maxSize[1]
         nz = (size_z + maxSize[2] - 1) // maxSize[2]
 
+        # Bin every block into its target tile in a single O(N) pass. Previously
+        # getBlocks() (a full structure rebuild) was called once per tile, and each
+        # tile re-scanned all blocks just to filter by its bounds, making the whole
+        # save O(tiles * N) -- catastrophic for a small maxSize. Now it is O(N + tiles).
+        # Reminder that if this is not shifted, then (x,y,z) needs to be shifted too.
+        shift = (0, 0, 0) if shifted else min_rel
+        blocks_by_tile = defaultdict(list)
+        for (x, y, z), block in self.getBlocks().items():
+            rx, ry, rz = x - shift[0], y - shift[1], z - shift[2]  # relative coords after shifting
+            # Match the original [x0, x1) bounds: blocks on the max edge are excluded.
+            if not (x_min <= rx < x_max and y_min <= ry < y_max and z_min <= rz < z_max):
+                continue
+            ix = (rx - x_min) // maxSize[0]
+            iy = (ry - y_min) // maxSize[1]
+            iz = (rz - z_min) // maxSize[2]
+            blocks_by_tile[(ix, iy, iz)].append((x, y, z, rx, ry, rz, block))
 
-
-
-            
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
@@ -304,58 +318,54 @@ class MCSchematicPlus(MCSchematic):
 
                     # Blocks
                     blocks = List[Compound]()
-                    
-                    # Reminder that if this is not shifted, then (x,y,z) needs to be shifted too
-                    for (x,y,z), block in self.getBlocks().items():
-                        rx, ry, rz = x, y, z # relative coordinates after shifting
-                        if not shifted:
-                            rx -= min_rel[0]
-                            ry -= min_rel[1]
-                            rz -= min_rel[2]
+                    has_non_air = False
 
-                        if x0 <= rx < x1 and y0 <= ry < y1 and z0 <= rz < z1:
-                            rel = (x-x0, y-y0, z-z0)
-                            
-                            if block not in palette_index:
-                                block_name = block.split("[")[0]
-                                entry = Compound({"Name": String(block_name)})
-                                if block.find("[") != -1:
-                                    props_str = block[block.find("[")+1:block.find("]")]
-                                    props = Compound()
-                                    for prop in props_str.split(","):
-                                        if "=" in prop: # Safety check for malformed strings
-                                            key, value = prop.split("=")
-                                            props[key] = String(value)
-                                    entry["Properties"] = props
-                                palette.append(entry)
-                                palette_index[block] = next_index
-                                next_index += 1
-                            
-                            state = palette_index[block]
-                            btag = Compound()
-                            btag["state"] = Int(state)
-                            btag["pos"] = List[Int]([Int(rel[0]), Int(rel[1]), Int(rel[2])])
-                            
-                            # Block entities will be messed up if shifted is false
-                            if (x,y,z) in self._structure._blockEntities:
-                                blockEntityString = self._structure._blockEntities[(x,y,z)]
-                                if "{" in blockEntityString:
-                                    nbtPortion = blockEntityString[blockEntityString.find("{"):] 
-                                    btag["nbt"] = parse_nbt(nbtPortion)
-                                    
-                            blocks.append(btag)
+                    for (x, y, z, rx, ry, rz, block) in blocks_by_tile.get((ix, iy, iz), ()):
+                        rel = (rx - x0, ry - y0, rz - z0)
+
+                        if block not in palette_index:
+                            block_name = block.split("[")[0]
+                            entry = Compound({"Name": String(block_name)})
+                            if block.find("[") != -1:
+                                props_str = block[block.find("[")+1:block.find("]")]
+                                props = Compound()
+                                for prop in props_str.split(","):
+                                    if "=" in prop: # Safety check for malformed strings
+                                        key, value = prop.split("=")
+                                        props[key] = String(value)
+                                entry["Properties"] = props
+                            palette.append(entry)
+                            palette_index[block] = next_index
+                            next_index += 1
+
+                        if block != "minecraft:air":
+                            has_non_air = True
+
+                        state = palette_index[block]
+                        btag = Compound()
+                        btag["state"] = Int(state)
+                        btag["pos"] = List[Int]([Int(rel[0]), Int(rel[1]), Int(rel[2])])
+
+                        # Block entities will be messed up if shifted is false
+                        if (x,y,z) in self._structure._blockEntities:
+                            blockEntityString = self._structure._blockEntities[(x,y,z)]
+                            if "{" in blockEntityString:
+                                nbtPortion = blockEntityString[blockEntityString.find("{"):]
+                                btag["nbt"] = parse_nbt(nbtPortion)
+
+                        blocks.append(btag)
 
                     root["palette"] = palette
 
-                    # Added by Joshua
-                    if removeAir:
+                    # Added by Joshua: skip this tile if it contains only air (or nothing).
+                    if removeAir and not has_non_air:
                         if nx>1 or ny>1 or nz>1 or filenameMode == "indexed":
                             fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
                         else:
                             fname = f"{base_name}.nbt"
                         print(f"Skipped saving {fname} because it contains only air blocks.")
-                        return
-                        
+                        continue
+
 
                     root["blocks"] = blocks
                     root["entities"] = List[Compound]() # TODO: Add support for entities

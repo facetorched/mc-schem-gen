@@ -11,14 +11,15 @@ OUTPUT_PATH = f"joshua_work/output/{CELL_NAME}"
 schem.placeSchematic(MCSchematicPlus(INPUT_FILE), placePosition=(0,0,0))
 
 # Save nbt file
-# schem.saveNBT(f"{OUTPUT_PATH}/{CELL_NAME}.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48), shifted=False)
+schem.saveNBT(f"{OUTPUT_PATH}/{CELL_NAME}.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48), shifted=False)
 
 # Save individual schematics for each block type
-split = schem.splitByBlock()
-for block_namespaced_name, block_vs in split.items():
+# split = schem.splitByBlock()
+# for block_namespaced_name, block_vs in split.items():
 
-    block_name = block_namespaced_name.replace("minecraft:", "")
-    block_vs.saveNBT(f"{OUTPUT_PATH}/{block_name}/v.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48), removeAir=False, shifted=False, rewriteExisting=True)
+#     block_name = block_namespaced_name.replace("minecraft:", "")
+
+#     block_vs.saveNBT(f"{OUTPUT_PATH}/{block_name}/v.nbt", Version.JE_1_20_1, maxSize=(48, 48, 48), removeAir=False, shifted=False, rewriteExisting=True)
 
 
 # Run: .venv/Scripts/python.exe joshua_work/gen_schem_splitter.py
