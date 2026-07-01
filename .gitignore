@@ -4,8 +4,10 @@ dist/
 *.egg-info/
 tmp/
 tests/output/
-venv/
+.venv/
+.venv312
 output/
 .vscode/
 joshua_work/air_clean_checker/
 joshua_work/cell_input/
+joshua_work/amulet_use/lm_output
