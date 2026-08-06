@@ -14,37 +14,48 @@ pip install -e .
 The class `MCSchematicPlus` offers the main functionality of the package and is a drop-in replacement for `MCSchematic`.
 
 ```python
-from mcschematic_plus import MCSchematicPlus, read_tiff, read_mesh
+from mcschematic_plus import MCSchematicPlus, read_tiff, read_mesh, read_image
 
 schem = MCSchematicPlus()
 
 # Load 3D data from a multipage tiff
 schem.placeVolume(read_tiff("tests/data/blobs.tiff"), "minecraft:blue_stained_glass")
 
-# Load 2D RGB image
-image = read_image("tests/data/qcb.png")
-mask = image.sum(axis=-1).astype(bool)
-schem.placeVolume(mask, image, blockColormap="standard")
-
 # Load blocks from an existing schematic file
-schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schematic"))
+schem.placeSchematic(MCSchematicPlus("tests/data/min_cell.schem"))
 
 # Load a 3D model
 voxels, position, scalars = read_mesh("tests/data/glycine.glb", spacing=0.1, edge_mode="inner", compute_scalars=True)
 colors = (scalars * 255).astype(int)
 schem.placeVolume(voxels, colors, blockColormap="standard", placePosition=position)
 
+# Load 2D RGB image
+image = read_image("tests/data/qcb.png")
+mask = image.sum(axis=-1).astype(bool)
+schem.placeVolume(mask, image, blockColormap="standard")
+
 # Visualize the schematic
-schem.show()
+pl = schem.show(display=False)
+pl.camera.zoom(1.3)
+pl.camera.elevation = 75
+pl.show()
 
 # Save both a schematic and nbt file
-vs.save_schem("output/example.schem")
-vs.save_nbt("output/example", "structure")
+schem.save("output/example")
+schem.saveNBT("output/example", origin=None)
 
-# Save individual schematics for each block type
-split = vs.split_by_block()
-for block_namespaced_name, block_vs in split.items():
-    block_name = block_namespaced_name.replace(":", "_")
-    block_vs.save_nbt(f"output/example_{block_name}", "structure")
-    block_vs.save_schem(f"output/example/split_{block_name}.schem")
+# Split the cell schematic by block type and save individual schematic and nbt files
+component_map = {
+    "minecraft:lime_stained_glass": "membrane",
+    "minecraft:red_wool": "dna",
+    "minecraft:yellow_wool": "ribosome"
+}
+cell_schem = MCSchematicPlus("tests/data/min_cell.schem")
+origin = cell_schem.getBounds()[0] # Consistent origin for all NBT files
+split = cell_schem.splitByBlock()
+for namespaced_name, block_schem in split.items():
+    component_name = component_map.get(namespaced_name, namespaced_name)
+    block_schem.saveNBT(f"output/cell_{component_name}", origin=origin)
+    block_schem.save(f"output/cell_{component_name}")
 ```
+![Result](assets/example_result.png)
