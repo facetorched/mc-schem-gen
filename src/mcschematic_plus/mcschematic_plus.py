@@ -96,6 +96,16 @@ class MCSchematicPlus(MCSchematic):
         for pos in self._structure.getBlockStates().keys():
             block_dict[pos] = self.getBlockStateAt(pos)
         return block_dict
+
+    def getBounds(self) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        """
+        Computes the -X -Y -Z and +X +Y +Z corners of this structure's bounds.
+        Can be thought of as returning the 2 corners of the cuboid
+        containing the structure. Note: the upper bound is inclusive.
+
+        Warning: this method can be very computationally intensive, use it carefully.
+        """
+        return self._structure.getBounds()
     
     def getBlockName(self, blockData: str | None) -> str | None:
         """Get the block name from blockData string. If blockData is None, return None."""
@@ -227,7 +237,7 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", shifted=False, skipEmpty: bool = False):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", origin=(0,0,0), skipEmpty: bool = False):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds maxSize in any dimension, it will be split into multiple files.
@@ -244,8 +254,9 @@ class MCSchematicPlus(MCSchematic):
         filenameMode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
-        shifted : bool, optional
-            If True, the structure minimum bound will be shifted to the origin (0, 0, 0) before saving. Default is False.
+        origin : tuple[int, int, int] | None, optional
+            The origin of the structure. Default is (0, 0, 0). If None, the structure's minimum bound will be used.
+            NBT files store local coordinates, so any block negative of this parameter will be clipped.
         skipEmpty : bool, optional
             If True, empty NBT files will not be saved. Default is False.
         """
@@ -255,13 +266,15 @@ class MCSchematicPlus(MCSchematic):
             os.makedirs(directory)
         if version is None:
             version = self.getLatestVersion()
-        bounds = self._structure.getBounds()
+        bounds = self.getBounds()
         x_min, y_min, z_min = bounds[0]
         x_max, y_max, z_max = np.array(bounds[1]) + 1  # bounds are inclusive
-        if not shifted:
-            if x_min < 0 or y_min < 0 or z_min < 0:
-                raise ValueError("Negative minimum bounds are not supported when shifted=False. Found minimum bound of ({x_min}, {y_min}, {z_min}).")
-            x_min, y_min, z_min = 0, 0, 0
+        if origin is None:
+            origin = (x_min, y_min, z_min)
+        else:
+            if x_min < origin[0] or y_min < origin[1] or z_min < origin[2]:
+                warnings.warn(f"Lower bound {bounds[0]} of the structure is negative of the specified origin {origin}. Some blocks will be clipped. Consider adjusting `origin` or setting it to None")
+            x_min, y_min, z_min = origin
         size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
         if maxSize is None:
             maxSize = (size_x, size_y, size_z)
@@ -273,6 +286,8 @@ class MCSchematicPlus(MCSchematic):
 
         blocks_by_tile = defaultdict(list)
         for (x, y, z), block in self.getBlocks().items():
+            if x < x_min or y < y_min or z < z_min:
+                continue  # skip blocks negative of the origin
             rx, ry, rz = x - x_min, y - y_min, z - z_min # relative to the minimum bound (or origin if not shifted)
             ix, iy, iz = rx // maxSize[0], ry // maxSize[1], rz // maxSize[2]
             tx, ty, tz = rx % maxSize[0], ry % maxSize[1], rz % maxSize[2] # position within the tile
