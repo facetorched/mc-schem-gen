@@ -6,6 +6,7 @@ from mcschematic import MCSchematic, MCStructure, Version
 from nbtlib.tag import *
 from nbtlib import File, parse_nbt
 from .block_colormap import BlockColormap, get_block_colormap
+from collections import defaultdict
 import warnings
 
 class MCSchematicPlus(MCSchematic):
@@ -90,10 +91,10 @@ class MCSchematicPlus(MCSchematic):
                 self.setBlock((int(x), int(y), int(z)), str(bd))
 
     def getBlocks(self):
-        """Return a dictionary of positions to block names."""
+        """Return a dictionary of positions to blockstate names."""
         block_dict : dict[tuple[int, int, int], str] = {}
         for pos in self._structure.getBlockStates().keys():
-            block_dict[pos] = self.getBlockDataAt(pos)
+            block_dict[pos] = self.getBlockStateAt(pos)
         return block_dict
     
     def getBlockName(self, blockData: str | None) -> str | None:
@@ -226,7 +227,7 @@ class MCSchematicPlus(MCSchematic):
         schematic.save(filepath)
         
 
-    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto"):
+    def saveNBT(self, filepath: str | os.PathLike, version : 'Version' = None, maxSize: int | tuple[int, int, int] | None = None, filenameMode: str = "auto", shifted=False, skipEmpty: bool = False):
         """
         Save the structure as one or more Minecraft schematic .nbt files in <directory>.
         If the structure exceeds maxSize in any dimension, it will be split into multiple files.
@@ -243,6 +244,10 @@ class MCSchematicPlus(MCSchematic):
         filenameMode : str, optional
             "auto" (default): use base_name.nbt if only one file is needed, otherwise use indexed names.
             "indexed": always use indexed names.
+        shifted : bool, optional
+            If True, the structure minimum bound will be shifted to the origin (0, 0, 0) before saving. Default is False.
+        skipEmpty : bool, optional
+            If True, empty NBT files will not be saved. Default is False.
         """
         directory = os.path.dirname(filepath)
         base_name = os.path.splitext(os.path.basename(filepath))[0]
@@ -250,8 +255,13 @@ class MCSchematicPlus(MCSchematic):
             os.makedirs(directory)
         if version is None:
             version = self.getLatestVersion()
-        x_min, y_min, z_min = self._structure.getBounds()[0]
-        x_max, y_max, z_max = self._structure.getBounds()[1]
+        bounds = self._structure.getBounds()
+        x_min, y_min, z_min = bounds[0]
+        x_max, y_max, z_max = np.array(bounds[1]) + 1  # bounds are inclusive
+        if not shifted:
+            if x_min < 0 or y_min < 0 or z_min < 0:
+                raise ValueError("Negative minimum bounds are not supported when shifted=False. Found minimum bound of ({x_min}, {y_min}, {z_min}).")
+            x_min, y_min, z_min = 0, 0, 0
         size_x, size_y, size_z = x_max - x_min, y_max - y_min, z_max - z_min
         if maxSize is None:
             maxSize = (size_x, size_y, size_z)
@@ -261,9 +271,31 @@ class MCSchematicPlus(MCSchematic):
         ny = (size_y + maxSize[1] - 1) // maxSize[1]
         nz = (size_z + maxSize[2] - 1) // maxSize[2]
 
+        blocks_by_tile = defaultdict(list)
+        for (x, y, z), block in self.getBlocks().items():
+            rx, ry, rz = x - x_min, y - y_min, z - z_min # relative to the minimum bound (or origin if not shifted)
+            ix, iy, iz = rx // maxSize[0], ry // maxSize[1], rz // maxSize[2]
+            tx, ty, tz = rx % maxSize[0], ry % maxSize[1], rz % maxSize[2] # position within the tile
+            blockEntityCompound = None
+            if (x,y,z) in self._structure._blockEntities: # assume no "ghost" block entities.
+                blockEntityString = self._structure._blockEntities[(x,y,z)]
+                blockEntityCompound = self._blockEntityStringToSchemCompound((x, y, z), blockEntityString)
+                # remove the pos tag since it is redundant
+                blockEntityCompound.pop("Pos", None)
+            blocks_by_tile[(ix, iy, iz)].append((tx, ty, tz, block, blockEntityCompound))
+
         for ix in range(nx):
             for iy in range(ny):
                 for iz in range(nz):
+                    if nx>1 or ny>1 or nz>1 or filenameMode == "indexed":
+                        fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
+                    elif filenameMode == "auto":
+                        fname = f"{base_name}.nbt"
+                    path = os.path.join(directory, fname)
+                    # if not rewrite and os.path.exists(path):
+                    #     continue
+
+                    # reduce tile size if it doesn't need to be full size
                     x0, y0, z0 = ix*maxSize[0] + x_min, iy*maxSize[1] + y_min, iz*maxSize[2] + z_min
                     x1, y1, z1 = min(x0+maxSize[0], x_max), min(y0+maxSize[1], y_max), min(z0+maxSize[2], z_max)
                     tile_size = (x1-x0, y1-y0, z1-z0)
@@ -282,50 +314,45 @@ class MCSchematicPlus(MCSchematic):
 
                     # Blocks
                     blocks = List[Compound]()
-                    
-                    for (x,y,z), block in self.getBlocks().items():
-                        if x0 <= x < x1 and y0 <= y < y1 and z0 <= z < z1:
-                            rel = (x-x0, y-y0, z-z0)
-                            
-                            if block not in palette_index:
-                                block_name = block.split("[")[0]
-                                entry = Compound({"Name": String(block_name)})
-                                if block.find("[") != -1:
-                                    props_str = block[block.find("[")+1:block.find("]")]
-                                    props = Compound()
-                                    for prop in props_str.split(","):
-                                        if "=" in prop: # Safety check for malformed strings
-                                            key, value = prop.split("=")
-                                            props[key] = String(value)
-                                    entry["Properties"] = props
-                                palette.append(entry)
-                                palette_index[block] = next_index
-                                next_index += 1
-                            
-                            state = palette_index[block]
-                            btag = Compound()
-                            btag["state"] = Int(state)
-                            btag["pos"] = List[Int]([Int(rel[0]), Int(rel[1]), Int(rel[2])])
-                            
-                            if (x,y,z) in self._structure._blockEntities:
-                                blockEntityString = self._structure._blockEntities[(x,y,z)]
-                                if "{" in blockEntityString:
-                                    nbtPortion = blockEntityString[blockEntityString.find("{"):] 
-                                    btag["nbt"] = parse_nbt(nbtPortion)
-                                    
-                            blocks.append(btag)
+                    has_non_air = False
+
+                    for (tx, ty, tz, block, blockEntityCompound) in blocks_by_tile.get((ix, iy, iz), ()):
+                        if block not in palette_index:
+                            block_name = block.split("[")[0]
+                            entry = Compound({"Name": String(block_name)})
+                            if block.find("[") != -1:
+                                props_str = block[block.find("[")+1:block.find("]")]
+                                props = Compound()
+                                for prop in props_str.split(","):
+                                    if "=" in prop: # Safety check for malformed strings
+                                        key, value = prop.split("=")
+                                        props[key] = String(value)
+                                entry["Properties"] = props
+                            palette.append(entry)
+                            palette_index[block] = next_index
+                            next_index += 1
+
+                        if block != "minecraft:air":
+                            has_non_air = True
+
+                        state = palette_index[block]
+                        btag = Compound()
+                        btag["state"] = Int(state)
+                        btag["pos"] = List[Int]([Int(tx), Int(ty), Int(tz)])
+
+                        if blockEntityCompound is not None:
+                            btag["nbt"] = blockEntityCompound
+                        blocks.append(btag)
+
+                    if skipEmpty and not has_non_air:
+                        # print(f"Skipped saving file {path} because it contains only air blocks.")
+                        continue
 
                     root["palette"] = palette
                     root["blocks"] = blocks
                     root["entities"] = List[Compound]() # TODO: Add support for entities
 
                     # Save
-                    if nx>1 or ny>1 or nz>1 or filenameMode == "indexed":
-                        fname = f"{base_name}_{ix}_{iy}_{iz}.nbt"
-                    elif filenameMode == "auto":
-                        fname = f"{base_name}.nbt"
-                    path = os.path.join(directory, fname)
-                    
                     nbt_file = File(root, gzipped=True, root_name="Schematic")
                     nbt_file.save(path)
 
